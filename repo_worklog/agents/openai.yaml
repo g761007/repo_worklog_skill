@@ -1,0 +1,80 @@
+# Agent / host manifest for the repo_worklog skill.
+#
+# Display names are what a human sees; model_id values are the runtime-specific
+# identifiers the host actually dispatches to. They are intentionally kept
+# separate (plan section 7.4) — replace each model_id with the exact identifier
+# your host supports before shipping.
+
+name: repo_worklog
+display_name: Repository Worklog
+description: >-
+  Analyze Git commits and source code by day, then preview and maintain a
+  project worklog.
+version: 0.1.0
+
+# The skill body is the control layer; this manifest only carries metadata.
+entrypoint: SKILL.md
+command: /repo_worklog
+
+ui:
+  category: developer-tools
+  icon: 📓
+  summary: Per-day project worklog from real Git diffs and code.
+  keywords:
+    - worklog
+    - work log
+    - changelog
+    - git history
+    - handoff
+    - 工作日誌
+
+# Subagent model selection per host. The skill picks the provider it runs under
+# and passes that provider's model_id to build_analysis_manifest.py / subagents.
+providers:
+  claude_code:
+    display_name: claude-sonnet-5
+    model_id: claude-sonnet-5           # replace with the host's exact id
+  codex:
+    display_name: gpt-5.6 Terra
+    model_id: gpt-5.6-terra             # replace with the host's exact id
+  gemini:
+    display_name: gemini-flash-3.0
+    model_id: gemini-flash-3.0          # replace with the host's exact id
+
+# Behaviour on an unavailable model (plan section 7.5): never silently swap to a
+# pricier model, never auto-pick another, never degrade to commit-message-only.
+model_unavailable_policy: halt-and-ask
+
+# Presentation shown when the user invokes /repo_worklog with no arguments.
+default_prompt: |
+  請選擇要整理的專案工作日誌範圍：
+
+  1. 今天
+  2. 指定日期
+  3. 最近 7 天
+  4. 最近 30 天
+  5. 自訂日期範圍
+  6. 今天，並包含尚未提交的異動
+  7. 自訂日期或範圍，並包含尚未提交的異動
+
+  日期範圍最多為 30 天。
+  所有操作都會先顯示 dry-run 預覽，不會直接修改專案檔案。
+
+capabilities:
+  reads_git_history: true
+  reads_source_code: true
+  writes_files:
+    - docs/PROJECT_WORKLOG.md
+  never_runs:
+    - git add
+    - git commit
+    - git push
+    - git fetch
+    - git pull
+    - git checkout
+    - git switch
+    - git merge
+    - git rebase
+  max_range_days: 30
+  default_include_uncommitted: false
+  always_dry_run_first: true
