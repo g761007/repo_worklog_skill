@@ -8,6 +8,9 @@ venv/
 # oh-my-claudecode session/HUD state (auto-generated, not project content)
 .omc/
 
+# Build artifacts
+/skill.zip
+
 # OS / editor
 .DS_Store
 *.swp
