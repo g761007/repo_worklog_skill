@@ -74,15 +74,25 @@ def repo_info(repo: str) -> dict:
               "The target directory is not inside a Git repository.",
               path=repo)
     root = _git(repo, ["rev-parse", "--show-toplevel"]).strip()
-    branch = _git(repo, ["rev-parse", "--abbrev-ref", "HEAD"]).strip()
-    detached = branch == "HEAD"
     has_commits = _git_ok(repo, ["rev-parse", "--verify", "--quiet", "HEAD"])
+    # symbolic-ref resolves the branch even on an unborn branch (empty repo);
+    # it fails only on a detached HEAD, which implies there are commits.
+    sym = subprocess.run(
+        ["git", "-C", repo, "symbolic-ref", "--quiet", "--short", "HEAD"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+    if sym.returncode == 0:
+        branch = sym.stdout.decode("utf-8", "replace").strip()
+        detached = False
+    else:
+        branch = None
+        detached = True
     head = _git(repo, ["rev-parse", "HEAD"]).strip() if has_commits else None
     short_head = _git(repo, ["rev-parse", "--short", "HEAD"]).strip() if has_commits else None
     dirty = bool(_git(repo, ["status", "--porcelain"]).strip())
     return {
         "root": root,
-        "branch": None if detached else branch,
+        "branch": branch,
         "detached_head": detached,
         "head": head,
         "short_head": short_head,
