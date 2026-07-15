@@ -1,9 +1,9 @@
 # Agent / host manifest for the repo_worklog skill.
 #
-# Display names are what a human sees; model_id values are the runtime-specific
-# identifiers the host actually dispatches to. They are intentionally kept
-# separate (plan section 7.4) — replace each model_id with the exact identifier
-# your host supports before shipping.
+# Subagent provider/model selection is NOT defined here. It lives in a single
+# machine-readable source — config/provider_models.json — resolved per host by
+# scripts/resolve_provider_model.py. This keeps one source of truth so the YAML,
+# references, and scripts can never drift to different model names.
 
 name: repo_worklog
 display_name: Repository Worklog
@@ -28,22 +28,14 @@ ui:
     - handoff
     - 工作日誌
 
-# Subagent model selection per host. The skill picks the provider it runs under
-# and passes that provider's model_id to build_analysis_manifest.py / subagents.
-providers:
-  anthropic:
-    display_name: claude-sonnet-5
-    model_id: claude-sonnet-5           # replace with the host's exact id
-  openai:
-    display_name: gpt-5.6-terra
-    model_id: gpt-5.6-terra             # replace with the host's exact id
-  google:
-    display_name: gemini-3-flash-preview
-    model_id: gemini-3-flash-preview          # replace with the host's exact id
-
-# Behaviour on an unavailable model (plan section 7.5): never silently swap to a
-# pricier model, never auto-pick another, never degrade to commit-message-only.
-model_unavailable_policy: halt-and-ask
+# Subagent model selection per host — SINGLE SOURCE OF TRUTH is the JSON below,
+# resolved by scripts/resolve_provider_model.py. Defaults prioritise cost
+# efficiency for bounded per-day analysis (anthropic: Claude Haiku 4.5, openai:
+# GPT-5.6 Luna @ low effort, google: Gemini 3.5 Flash). On an unavailable model
+# the skill halts and asks — it never silently swaps to a pricier model,
+# auto-picks another, or degrades to commit-message-only. See that file's
+# model_unavailable_policy and references/provider-models.md.
+model_config: config/provider_models.json
 
 # Presentation shown when the user invokes /repo_worklog with no arguments.
 default_prompt: |

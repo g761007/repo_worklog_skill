@@ -175,7 +175,26 @@ def _required_context(groups: list[dict]) -> list[dict]:
     return context
 
 
+def _parse_model(model_json: str) -> dict | None:
+    """Parse the structured model object threaded in from resolve_provider_model.
+
+    The object is emitted verbatim onto the manifest so every subagent runs on
+    the same provider/model. ``reasoning_effort`` is present only when it applies
+    (e.g. openai) — never an empty string. Absent input -> ``model: null``.
+    """
+    if not model_json:
+        return None
+    try:
+        model = json.loads(model_json)
+    except json.JSONDecodeError as exc:
+        _fail("BAD_MODEL_JSON", f"--model-json is not valid JSON: {exc}")
+    if not isinstance(model, dict):
+        _fail("BAD_MODEL_JSON", "--model-json must be a JSON object.")
+    return model
+
+
 def build_manifest(args: argparse.Namespace) -> dict:
+    model = _parse_model(args.model_json)
     history = _load_json(args.history)
     if history and not history.get("ok", True):
         _fail("BAD_HISTORY_INPUT", "collect_git_history reported an error.",
@@ -205,7 +224,7 @@ def build_manifest(args: argparse.Namespace) -> dict:
         "timezone": args.timezone,
         "include_uncommitted": bool(args.include_uncommitted),
         "provider": args.provider,
-        "model": args.model,
+        "model": model,
         "has_changes": bool(commits) or bool(uncommitted),
         "commit_count": len(commits),
         "commits": [{
@@ -237,7 +256,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--include-uncommitted", action="store_true")
     p.add_argument("--provider", default="anthropic",
                    help="Subagent provider key (anthropic / openai / google).")
-    p.add_argument("--model", default="", help="Runtime model id for the provider.")
+    p.add_argument("--model-json", default="",
+                   help="Structured model object from resolve_provider_model.py "
+                        "(JSON: {display_name, model_id[, reasoning_effort]}).")
     return p
 
 
