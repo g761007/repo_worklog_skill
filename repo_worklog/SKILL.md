@@ -161,8 +161,14 @@ them with `git show`.
 ```
 python3 scripts/collect_git_history.py ... \
   | python3 scripts/build_analysis_manifest.py --date <day> --timezone <tz> \
-      --provider <provider> --model <model_id> [--include-uncommitted --worktree <file>]
+      --provider <provider> --model-json '<model object>' [--include-uncommitted --worktree <file>]
 ```
+
+Resolve `<provider>` and `<model object>` **once for the whole run** with
+`scripts/resolve_provider_model.py --host <anthropic|openai|google>` (see the
+model table below), then thread its `provider` and `model` into every day's
+manifest. `model` is an object — `{display_name, model_id}` plus
+`reasoning_effort` for openai only.
 
 Gives `file_groups` (grouped by real work area), `required_context`, and a
 `large_day` flag recommending Code Analysis Subagents when the day is big.
@@ -176,17 +182,27 @@ write to the worklog. Days with no commits still report `has_changes:false`.
 For large days, the Day Subagent may fan out into Code Analysis Subagents grouped
 by feature/module (see `references/subagent-contract.md`).
 
-Model per host — pick the provider you are running under and pass its `model_id`:
+Model per host — resolve the provider you are running under with
+`resolve_provider_model.py --host <key>` and pass its `model_id` (cost-first
+defaults; single source is `config/provider_models.json`):
 
-| Host        | display        | provider key   |
-|-------------|----------------|----------------|
-| Claude Code | claude-sonnet-5 | `anthropic` |
-| Codex       | gpt-5.6-terra  | `openai`        |
-| Gemini      | gemini-3-flash-preview | `google`     |
+| Host        | provider key | default display | default model_id      |
+|-------------|--------------|-----------------|-----------------------|
+| Claude Code | `anthropic`  | Claude Haiku 4.5 | `claude-haiku-4-5`   |
+| Codex       | `openai`     | GPT-5.6 Luna (effort `low`) | `gpt-5.6-luna` |
+| Gemini      | `google`     | Gemini 3.5 Flash | `gemini-3.5-flash`   |
 
-If the chosen model is unavailable: **stop**, report it, list candidates, and
-let the user decide. Never silently fall back to a pricier model, never degrade
-to reading only commit messages. Details: `references/provider-models.md`.
+Pick the host you actually run under — never guess the provider from a model
+name, and never pass all three at once. If the host cannot be determined, stop
+and report a configuration error (`UNKNOWN_HOST`). Overrides: an explicit
+`--model` beats `REPO_WORKLOG_<PROVIDER>_MODEL`, which beats the config default.
+
+If the chosen model is unavailable: **stop**, report the provider and requested
+`model_id`, list candidates, and let the user decide. Never silently fall back to
+a pricier model, never auto-switch to the escalation model, never degrade to
+reading only commit messages. Escalation is opt-in and requires explicit user
+approval (a new dry-run + new `preview_id`). Details:
+`references/provider-models.md`.
 
 ---
 
@@ -258,11 +274,13 @@ JSON
 
 6. Show the user the dry-run summary described in
    `references/interaction-flow.md`: repository root, branch, HEAD, timezone,
-   requested mode, resolved range, `include_uncommitted`, per-day commit counts
-   and status, files analyzed, per-date planned action (create / overwrite /
-   no-change), the index rebuild, preserved MANUAL dates, each day file's full
-   preview, the index preview, the target directory `PROJECT_WORKLOG/`, the
-   `preview_id`, and the line **"No files have been modified."**
+   requested mode, resolved range, `include_uncommitted`, the **subagent
+   configuration** (provider, model, reasoning effort, automatic escalation:
+   disabled), per-day commit counts and status, files analyzed, per-date planned
+   action (create / overwrite / no-change), the index rebuild, preserved MANUAL
+   dates, each day file's full preview, the index preview, the target directory
+   `PROJECT_WORKLOG/`, the `preview_id`, and the line
+   **"No files have been modified."**
 
 ---
 
@@ -345,10 +363,11 @@ Full rules: `references/interaction-flow.md`, `references/code-analysis-rules.md
 | Diff reading, context expansion, final-state, merge/revert/rename/binary/lockfile/submodule | `references/code-analysis-rules.md` |
 | Day/Code-Analysis subagent prompts, return schema, confidence, evidence | `references/subagent-contract.md` |
 | Directory layout, day/index markers, create/overwrite, migration | `references/worklog-format.md` |
-| Per-host models and unavailable-model handling | `references/provider-models.md` |
+| Per-host models, overrides, unavailable-model handling, escalation | `references/provider-models.md` |
 
 | Script | Role |
 |--------|------|
+| `resolve_provider_model.py` | Resolve the per-host subagent provider/model (single source `config/provider_models.json`; overrides, escalation, halt-and-ask) |
 | `resolve_date_range.py` | Parse/validate dates, timezone, 30-day limit, per-day bounds |
 | `collect_git_history.py` | Repo metadata + per-day commit facts (no summaries, no author filter) |
 | `inspect_worktree.py` | Staged/unstaged/untracked + worktree fingerprint (include_uncommitted only) |

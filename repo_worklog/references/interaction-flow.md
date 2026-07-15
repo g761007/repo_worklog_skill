@@ -170,6 +170,8 @@ the user a summary that includes at least all of the following fields:
 - requested date mode
 - resolved date range
 - `include_uncommitted` status
+- subagent configuration (provider, model, model id, reasoning effort, automatic
+  escalation: disabled) — see below
 - per-day commit counts
 - per-day analysis status
 - number of files analyzed
@@ -180,6 +182,29 @@ the user a summary that includes at least all of the following fields:
 - target directory (default `PROJECT_WORKLOG/`)
 - the `preview_id`
 - the line **`No files have been modified.`**
+
+**Subagent configuration block.** Resolved once by
+`resolve_provider_model.py --host <key>`. When every day uses the same model,
+show it once:
+
+```
+Subagent configuration:
+- Provider: OpenAI
+- Model: GPT-5.6 Luna
+- Model ID: gpt-5.6-luna
+- Reasoning effort: low
+- Automatic escalation: disabled
+```
+
+Omit the `Reasoning effort` line for providers that have none (anthropic /
+google). If the user approved escalation for some dates, list per date instead:
+
+```
+Subagent configuration:
+- 2026-07-13: GPT-5.6 Luna
+- 2026-07-14: GPT-5.6 Terra (user-approved escalation)
+- 2026-07-15: GPT-5.6 Luna
+```
 
 `update_daily_worklog.py` (dry-run) supplies: `worklog_dir`, `dir_exists`,
 `planned_changes` (each `{date, path, action:"create"|"overwrite"|"no_change",

@@ -89,7 +89,7 @@ Fields:
 | `timezone` | string | Resolved IANA timezone. |
 | `include_uncommitted` | bool | Whether working-tree changes are in scope (today only). |
 | `provider` | string | `anthropic` / `openai` / `google`. |
-| `model` | string | Runtime model id for that provider (section 4). |
+| `model` | object\|null | `{display_name, model_id}` (+ `reasoning_effort` for openai). Section 4. |
 | `has_changes` | bool | True if there are commits or in-scope uncommitted changes. |
 | `commit_count` | int | Number of commits on the day. |
 | `commits[]` | array | `{short_hash, full_hash, subject, is_merge, is_revert_candidate}`. |
@@ -107,17 +107,22 @@ read each relevant patch and the surrounding code before drawing conclusions.
 
 ## 4. Provider / model per host
 
-The orchestrator sets `provider` and `model` on the manifest according to the
-host it is running under:
+The orchestrator resolves the model with `scripts/resolve_provider_model.py
+--host <key>` and sets `provider` and `model` on the manifest from its output.
+Defaults are cost-first; the host is never guessed. Full rules (overrides, env
+vars, unavailable-model halt, escalation) are in `references/provider-models.md`.
 
-| Host | `provider` | `model` |
-|------|-----------|---------|
-| Claude Code | `anthropic` | `claude-sonnet-5` |
-| Codex | `openai` | `gpt-5.6-terra` (5.6 Terra) |
-| Gemini | `google` | `gemini-3-flash-preview` (Gemini 3 Flash) |
+| Host | `provider` | default `model` (`model_id`) |
+|------|-----------|------------------------------|
+| Claude Code | `anthropic` | Claude Haiku 4.5 (`claude-haiku-4-5`) |
+| Codex | `openai` | GPT-5.6 Luna (`gpt-5.6-luna`, reasoning_effort `low`) |
+| Gemini | `google` | Gemini 3.5 Flash (`gemini-3.5-flash`) |
 
-A Day Subagent runs on, and spawns any Code Analysis Subagents on, the same
-provider/model it was given.
+`model` is an object — `{display_name, model_id}`, plus `reasoning_effort` for
+`openai` only (omitted for anthropic/google, never an empty string). A Day
+Subagent runs on, and spawns any Code Analysis Subagents on, the same
+provider/model it was given. It never swaps to another or to the escalation
+model on its own.
 
 ---
 
@@ -164,6 +169,10 @@ array is empty. No prose outside the JSON.
 {
   "date": "YYYY-MM-DD",
   "timezone": "Asia/Taipei",
+  "status": "complete",
+  "confidence": "verified",
+  "escalation_recommended": false,
+  "escalation_reasons": [],
   "has_changes": true,
   "commits": [],
   "work_items": [],
@@ -203,7 +212,12 @@ Each entry in `work_items[]` is exactly:
 Rules:
 
 - A no-change day returns `has_changes:false` with the arrays empty (still a
-  valid object).
+  valid object) and `status:"complete"`, `confidence:"verified"`.
+- `status` is one of `complete` / `partial` / `failed`; `confidence` is one of
+  `verified` / `inferred` / `unknown` (the day-level aggregate — see §7).
+- `escalation_recommended` (bool) and `escalation_reasons[]` are an **advisory
+  signal only** to the orchestrator; they never trigger an automatic model switch
+  (§7).
 - `uncommitted_changes[]` is populated only when `include_uncommitted` is set and
   is attributed to today only.
 - Anything the subagent could not verify goes in `uncertainties[]`, not into a
@@ -222,6 +236,25 @@ Every `work_item` carries a `confidence`. Allowed values (plan §13.1):
 An `inferred` or `unknown` conclusion must **never** be written as an established
 fact. When confidence is not `verified`, say so in the item and, where relevant,
 record the gap in `uncertainties[]`.
+
+The **day-level** `confidence` is the aggregate for the date: `verified` only when
+every important conclusion is provable; drop to `inferred` or `unknown` otherwise.
+
+**Escalation recommendation (advisory only).** Set `escalation_recommended:true`
+and list machine-readable `escalation_reasons[]` when any of these hold:
+
+- the end-of-day state after a merge cannot be confirmed,
+- a revert's completeness cannot be confirmed,
+- multiple commits or diffs give conflicting evidence,
+- required code context could not be read,
+- cross-module behaviour cannot be confirmed,
+- `status` is `partial`,
+- day-level `confidence` is `unknown`.
+
+This flag is a **suggestion to the orchestrator only**. The subagent does not
+switch models, and the orchestrator never escalates automatically — it may only
+surface the suggestion in the dry-run and act on it after explicit user approval
+(see `references/provider-models.md` → Escalation).
 
 ---
 
@@ -257,7 +290,7 @@ INPUTS
 - timezone:           [IANA tz, e.g. Asia/Taipei]
 - repository root:    [absolute path]
 - include_uncommitted:[true|false]   (uncommitted content belongs to TODAY only)
-- provider / model:   [anthropic|openai|google] / [claude-sonnet-5|gpt-5.6-terra|gemini-3-flash-preview]
+- provider / model:   [anthropic|openai|google] / [model_id from the manifest's model.model_id]
 - analysis manifest (from build_analysis_manifest.py):
 [PASTE THE MANIFEST JSON HERE]
 
@@ -284,6 +317,10 @@ OUTPUT
 - Return EXACTLY the Day Subagent return schema (section 6 of the subagent
   contract). All keys present; empty arrays where nothing applies. A day with no
   work returns has_changes:false.
+- Set status (complete|partial|failed), the day-level confidence
+  (verified|inferred|unknown), and escalation_recommended + escalation_reasons[]
+  honestly per section 7. escalation_recommended is a SUGGESTION only — never
+  switch models yourself.
 - Every important conclusion cites evidence: commit hash, file path,
   symbol/function, diff/code region, test file, and line numbers/ranges where
   relevant.

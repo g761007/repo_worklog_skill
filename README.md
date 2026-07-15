@@ -21,9 +21,12 @@ only writes after you explicitly confirm. It logs the whole project's history
 repo_worklog/                 # the skill (this whole directory is the skill)
 ├── SKILL.md                  # control layer: triggers, flow, script/reference map
 ├── agents/
-│   └── openai.yaml           # host manifest: display name, providers, UI metadata
+│   └── openai.yaml           # host manifest: display name, UI metadata, model_config pointer
+├── config/
+│   └── provider_models.json  # single source of truth for per-host subagent models
 ├── scripts/                  # deterministic Python helpers (stdlib only)
-│   ├── resolve_date_range.py       # date/timezone parsing, 30-day limit, per-day bounds
+│   ├── resolve_provider_model.py    # resolve per-host provider/model (overrides, escalation, halt-and-ask)
+│   ├── resolve_date_range.py        # date/timezone parsing, 30-day limit, per-day bounds
 │   ├── collect_git_history.py      # repo metadata + per-day commit facts (no summaries)
 │   ├── inspect_worktree.py         # staged/unstaged/untracked + worktree fingerprint
 │   ├── build_analysis_manifest.py  # group changed files, propose reading, flag big days
@@ -117,8 +120,11 @@ the old file, and refuses if the legacy markers are corrupt.
   (`update_daily_worklog.py --dir` / `rebuild_worklog_index.py --dir` to override).
 - **Timezone:** auto-detected (`$TZ` → `/etc/localtime` → offset); override with
   `resolve_date_range.py --timezone Asia/Taipei`.
-- **Subagent models:** set per host in `repo_worklog/agents/openai.yaml`
-  (`providers.*.model_id`). See `references/provider-models.md`.
+- **Subagent models:** defined once in `repo_worklog/config/provider_models.json`
+  (cost-first defaults — Claude Haiku 4.5 / GPT-5.6 Luna / Gemini 3.5 Flash) and
+  resolved per host by `resolve_provider_model.py`. Override with
+  `REPO_WORKLOG_{ANTHROPIC,OPENAI,GOOGLE}_MODEL` or an explicit `--model`. See
+  `references/provider-models.md`.
 - **Preview state:** stored outside the repo in `~/.repo_worklog/previews/`.
 
 ### Development commands
@@ -192,8 +198,10 @@ subagent 分析，所有變更都先以 dry-run 預覽，**經你明確確認後
 
 - `repo_worklog/`：整個目錄就是 skill 本體。
   - `SKILL.md`：控制層——觸發條件、流程、腳本與 references 對照。
-  - `agents/openai.yaml`：宿主 manifest——顯示名稱、providers 模型、UI metadata。
+  - `agents/openai.yaml`：宿主 manifest——顯示名稱、UI metadata、model_config 指標。
+  - `config/provider_models.json`：逐宿主 subagent 模型的**單一設定來源**。
   - `scripts/`：確定性 Python 腳本（僅用標準庫，各自輸出單一 JSON）。
+    - `resolve_provider_model.py`：依宿主解析 provider／模型（覆寫、escalation、halt-and-ask）。
     - `resolve_date_range.py`：日期／時區解析、30 天上限、逐日半開區間。
     - `collect_git_history.py`：repo 中繼資料與逐日 commit 事實（不摘要、不依作者過濾）。
     - `inspect_worktree.py`：staged／unstaged／untracked 與 worktree 指紋。
@@ -275,8 +283,11 @@ ln -s "$(pwd)/repo_worklog" ~/.claude/skills/repo_worklog
   `update_daily_worklog.py --dir` ／ `rebuild_worklog_index.py --dir` 覆寫）。
 - **時區**：自動偵測（`$TZ` → `/etc/localtime` → 系統偏移）；可用
   `resolve_date_range.py --timezone Asia/Taipei` 指定。
-- **Subagent 模型**：在 `repo_worklog/agents/openai.yaml` 依宿主設定
-  （`providers.*.model_id`），詳見 `references/provider-models.md`。
+- **Subagent 模型**：於 `repo_worklog/config/provider_models.json` 統一設定
+  （成本優先預設——Claude Haiku 4.5 ／ GPT-5.6 Luna ／ Gemini 3.5 Flash），由
+  `resolve_provider_model.py` 依宿主解析；可用
+  `REPO_WORKLOG_{ANTHROPIC,OPENAI,GOOGLE}_MODEL` 或 `--model` 覆寫，詳見
+  `references/provider-models.md`。
 - **Preview 狀態**：存放在 repo 之外的 `~/.repo_worklog/previews/`。
 
 ### 安全模型
