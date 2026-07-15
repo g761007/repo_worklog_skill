@@ -159,7 +159,8 @@ sections 4–7), which always ends in a dry-run.
 ## 6. Dry-run summary
 
 Every valid request produces a **preview only**. After merging the per-day
-results and simulating the update with `update_worklog.py` (no `--apply`), show
+results, simulate the day-file writes with `update_daily_worklog.py` and the
+index rebuild with `rebuild_worklog_index.py` (both without `--apply`), then show
 the user a summary that includes at least all of the following fields:
 
 - repository root
@@ -172,24 +173,25 @@ the user a summary that includes at least all of the following fields:
 - per-day commit counts
 - per-day analysis status
 - number of files analyzed
-- dates to insert
-- dates to overwrite
-- no-change days
-- preserved MANUAL sections
-- the full worklog preview (from `preview_content`)
-- target file path (default `docs/PROJECT_WORKLOG.md`)
+- per-date planned action (create / overwrite / no-change)
+- the index rebuild
+- preserved MANUAL sections (day files and the index)
+- each day file's full preview (from `previews`) and the index preview
+- target directory (default `PROJECT_WORKLOG/`)
 - the `preview_id`
 - the line **`No files have been modified.`**
 
-The `dry-run` output of `update_worklog.py` supplies the mechanical fields:
-`mode`, `target`, `target_exists`, `target_dir_exists`, `planned_changes`
-(each `{date, action:"insert"|"overwrite", manual_preserved}`),
-`preserved_manual_dates`, `original_sha256`, `preview_sha256`, `preview_content`,
-`diff`, and `note` (`"No files have been modified."`). The `preview_id` comes
-from `preview_state.py create`, formatted `rw-YYYYMMDD-<6 hex>`.
+`update_daily_worklog.py` (dry-run) supplies: `worklog_dir`, `dir_exists`,
+`planned_changes` (each `{date, path, action:"create"|"overwrite"|"no_change",
+manual_preserved}`), `summaries` (one-line index summary per date), `previews`
+(full per-day file text), `preserved_manual_dates`, and `file_hashes`.
+`rebuild_worklog_index.py` (dry-run, given `{"overrides": summaries}`) supplies
+the index `preview`, the descending `dates`, `index_hash`, and
+`preserved_index_manual`. The `preview_id` comes from `preview_state.py create`,
+formatted `rw-YYYYMMDD-<6 hex>`.
 
 A compact rendering (fuller field list above; per-day counts, files analyzed,
-no-change days, preserved MANUAL, and the full preview are shown too):
+preserved MANUAL, and the full per-file previews are shown too):
 
 ```
 Dry-run completed.
@@ -209,12 +211,18 @@ Asia/Taipei
 Range:
 2026-07-09 to 2026-07-15
 
-Target:
-docs/PROJECT_WORKLOG.md
+Target directory:
+PROJECT_WORKLOG/
 
 Planned changes:
-- 2026-07-14: overwrite generated section
-- 2026-07-15: insert new entry
+- PROJECT_WORKLOG/2026-07-13.md: no changes
+- PROJECT_WORKLOG/2026-07-14.md: overwrite generated section
+- PROJECT_WORKLOG/2026-07-15.md: create new file
+- PROJECT_WORKLOG/index.md: rebuild generated index
+
+Preserved manual sections:
+- PROJECT_WORKLOG/2026-07-14.md
+- PROJECT_WORKLOG/index.md
 
 No files have been modified.
 
@@ -222,8 +230,8 @@ Preview ID:
 rw-20260715-a81f2c
 ```
 
-The dry-run never creates `docs/` and never writes anything. The skill never runs
-`git add` / `commit` / `push`.
+The dry-run never creates `PROJECT_WORKLOG/` and never writes anything. The skill
+never runs `git add` / `commit` / `push`.
 
 ---
 
@@ -243,38 +251,47 @@ Anything ambiguous is not a confirmation — re-show or clarify rather than writ
 
 On confirmation, before writing, re-detect repository state, re-run
 `inspect_worktree.py` if `include_uncommitted` is set, re-hash the current
-worklog, then verify the preview:
+`index.md` and each target day file, re-fingerprint the day-file listing, then
+verify the preview:
 
 ```
 python3 scripts/preview_state.py verify --id <preview_id> --mark-applied <<'JSON'
 {"repository": {"root": "...", "branch": "...", "head": "...",
                 "worktree_fingerprint": "..."},
- "worklog": {"original_sha256": "<current hash>"},
- "params": {"include_uncommitted": false}}
+ "worklog": {"index_sha256": "<current or 'missing'>",
+             "day_files": {"2026-07-15": "<current or 'missing'>"},
+             "dir_fingerprint": "<current>"},
+ "params": {"timezone": "...", "include_uncommitted": false}}
 JSON
 ```
 
 `verify` returns `consistent` (bool), `mismatches[{field,expected,actual}]`,
 `already_applied`, `expired`, `age_seconds`, and `reason`, and exits with code `3`
 when inconsistent. Consistency is checked across: repository root, branch, HEAD,
-working-tree fingerprint, the worklog's original content hash, and
-`include_uncommitted`. The default TTL is 24 hours. Preview state lives in
-`~/.repo_worklog/previews/`, outside the repo.
+working-tree fingerprint, `index.md` content, each target day file, the day-file
+listing, timezone, and `include_uncommitted` — so a changed target day file, a
+changed `index.md`, or an added/removed day file all invalidate the preview. The
+default TTL is 24 hours. Preview state lives in `~/.repo_worklog/previews/`,
+outside the repo.
 
 If `consistent:false` (exit 3) — including `already_applied`, `expired`, or any
 state change since the dry-run — **do not write.** Explain the reason to the user
 and re-run the dry-run to mint a fresh preview. Never apply a stale preview.
 
-When `consistent:true`, apply the same entries with `--apply`:
+When `consistent:true`, apply the same entries, then rebuild the index:
 
 ```
-python3 scripts/update_worklog.py --target docs/PROJECT_WORKLOG.md --apply <<'JSON'
-{"entries": { ... same entries as the dry-run ... }}
+python3 scripts/update_daily_worklog.py --dir PROJECT_WORKLOG --apply <<'JSON'
+{"meta": { ... same meta ... }, "entries": { ... same entries as the dry-run ... }}
 JSON
+python3 scripts/rebuild_worklog_index.py --dir PROJECT_WORKLOG --apply
 ```
 
-Apply output adds `written_sha256` and `final_dates`. `docs/` is created now if it
-was missing. Then validate and report the actual update.
+The day-file apply is one all-or-nothing transaction (`written_dates` in its
+output); `rebuild_worklog_index.py --apply` then writes `index.md` atomically.
+`PROJECT_WORKLOG/` is created now if it was missing. Then run
+`validate_daily_worklog.py --dir PROJECT_WORKLOG` and
+`validate_worklog_index.py --dir PROJECT_WORKLOG` and report the actual update.
 
 ---
 

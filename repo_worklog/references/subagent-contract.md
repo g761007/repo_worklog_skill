@@ -27,9 +27,10 @@ sees and every decision that spans more than one day:
 - subagent dispatch and provider/model selection,
 - result-completeness checks (every dispatched date returned a valid object),
 - cross-day deduplication,
-- Markdown generation,
-- dry-run, preview management, and writing (`update_worklog.py`,
-  `preview_state.py`).
+- Markdown generation (one GENERATED block per day; the `當日摘要` first line
+  becomes that day's row in `index.md`),
+- dry-run, preview management, and writing (`update_daily_worklog.py`,
+  `rebuild_worklog_index.py`, `preview_state.py`).
 
 The orchestrator **must not** use a commit `subject` in place of a subagent's
 code analysis. If a day has no analysis, that day has no content — it is not

@@ -1,7 +1,8 @@
 # repo_worklog skill
 
 A portable agent **skill** that turns a Git repository's real code history into a
-human-readable, per-day **project worklog** at `docs/PROJECT_WORKLOG.md`.
+human-readable, per-day **project worklog** under `PROJECT_WORKLOG/` — one
+Markdown file per day plus an `index.md` that links them newest-first.
 
 It reads the actual diffs and surrounding code — never just commit messages —
 analyzes each day with its own subagent, previews every change as a dry-run, and
@@ -22,14 +23,17 @@ repo_worklog/                 # the skill (this whole directory is the skill)
 ├── agents/
 │   └── openai.yaml           # host manifest: display name, providers, UI metadata
 ├── scripts/                  # deterministic Python helpers (stdlib only)
-│   ├── resolve_date_range.py     # date/timezone parsing, 30-day limit, per-day bounds
-│   ├── collect_git_history.py    # repo metadata + per-day commit facts (no summaries)
-│   ├── inspect_worktree.py       # staged/unstaged/untracked + worktree fingerprint
-│   ├── build_analysis_manifest.py# group changed files, propose reading, flag big days
-│   ├── update_worklog.py         # simulate/apply insert & overwrite; preserve MANUAL
-│   ├── validate_worklog.py       # marker + UTF-8 structural validation
-│   ├── preview_state.py          # preview fingerprint, id, apply-time consistency
-│   └── worklog_markers.py        # shared marker parser/serialiser (imported by 3 above)
+│   ├── resolve_date_range.py       # date/timezone parsing, 30-day limit, per-day bounds
+│   ├── collect_git_history.py      # repo metadata + per-day commit facts (no summaries)
+│   ├── inspect_worktree.py         # staged/unstaged/untracked + worktree fingerprint
+│   ├── build_analysis_manifest.py  # group changed files, propose reading, flag big days
+│   ├── update_daily_worklog.py     # create/overwrite per-day files (transactional); preserve MANUAL
+│   ├── rebuild_worklog_index.py    # rebuild index.md from day files; preserve index MANUAL
+│   ├── validate_daily_worklog.py   # per-day file marker/title/UTF-8 validation
+│   ├── validate_worklog_index.py   # index marker/order/link/UTF-8 validation
+│   ├── preview_state.py            # multi-file preview fingerprint, apply-time consistency
+│   ├── migrate_legacy_worklog.py   # one-time split of the legacy single file
+│   └── worklog_markers.py          # shared day/index parser/serialiser
 └── references/               # detailed specs the skill loads on demand
     ├── interaction-flow.md
     ├── date-parameter-contract.md
@@ -38,7 +42,17 @@ repo_worklog/                 # the skill (this whole directory is the skill)
     ├── worklog-format.md
     └── provider-models.md
 
-docs/init_plan.md             # the original design specification
+docs/init_plan.md             # the original design specification (single-file era)
+```
+
+The worklog itself is written to `PROJECT_WORKLOG/` at the repository root:
+
+```
+PROJECT_WORKLOG/
+├── index.md          # navigation: a date-descending table linking every day
+├── 2026-07-15.md     # exactly one day per file
+├── 2026-07-14.md
+└── ...
 ```
 
 ### Requirements
@@ -92,10 +106,15 @@ Every valid request produces a **dry-run preview** with a `preview_id`. Confirm
 with “寫入” / “確認更新” / `apply <preview_id>` to write. See
 `repo_worklog/references/interaction-flow.md` for the full flow.
 
+Already have a legacy single-file `docs/PROJECT_WORKLOG.md`? Migrate it once with
+`/repo_worklog migrate` (or `python3 scripts/migrate_legacy_worklog.py`). It
+splits each date into `PROJECT_WORKLOG/<date>.md`, previews first, never deletes
+the old file, and refuses if the legacy markers are corrupt.
+
 ### Configuration
 
-- **Target file:** defaults to `docs/PROJECT_WORKLOG.md`
-  (`update_worklog.py --target` to override).
+- **Target directory:** defaults to `PROJECT_WORKLOG/` at the repo root
+  (`update_daily_worklog.py --dir` / `rebuild_worklog_index.py --dir` to override).
 - **Timezone:** auto-detected (`$TZ` → `/etc/localtime` → offset); override with
   `resolve_date_range.py --timezone Asia/Taipei`.
 - **Subagent models:** set per host in `repo_worklog/agents/openai.yaml`
@@ -110,10 +129,13 @@ Each script is standalone and prints one JSON object to stdout:
 cd repo_worklog
 python3 scripts/resolve_date_range.py --days 7 --timezone Asia/Taipei --today 2026-07-15
 python3 scripts/collect_git_history.py --repo /path/to/repo --info-only
-python3 scripts/update_worklog.py --target /tmp/WL.md <<'JSON'
-{"entries": {"2026-07-15": {"generated_markdown": "### 當日摘要\n\n..."}}}
+python3 scripts/update_daily_worklog.py --dir /tmp/PROJECT_WORKLOG <<'JSON'
+{"meta": {"timezone": "Asia/Taipei", "branch": "main", "head": "abc1234"},
+ "entries": {"2026-07-15": {"generated_markdown": "## 當日摘要\n\n..."}}}
 JSON
-python3 scripts/validate_worklog.py --target /tmp/WL.md
+python3 scripts/rebuild_worklog_index.py --dir /tmp/PROJECT_WORKLOG
+python3 scripts/validate_daily_worklog.py --dir /tmp/PROJECT_WORKLOG
+python3 scripts/validate_worklog_index.py --dir /tmp/PROJECT_WORKLOG
 ```
 
 ### Tests
@@ -127,19 +149,27 @@ python3 -m unittest discover -s tests -v
 
 It builds a controlled Git fixture (single/multi-commit days, revert, rename,
 binary, empty repo) and covers the date contract, Git collection, worktree
-inspection, the analysis manifest, the worklog engine (insert, overwrite, MANUAL
-preservation, corruption refusal), preview consistency, and the full
-deterministic pipeline. CI runs the same suite (see `.github/workflows/ci.yml`).
-`docs/init_plan.md` section 27 lists the broader acceptance-test matrix.
+inspection, the analysis manifest, the day-file engine (create, overwrite,
+MANUAL preservation, no-change, corruption refusal), the index rebuild (summaries,
+ordering, MANUAL preservation), both validators, multi-file preview consistency,
+legacy migration, and the full deterministic pipeline. CI runs the same suite
+(see `.github/workflows/ci.yml`). `docs/init_plan.md` section 27 lists the broader
+acceptance-test matrix.
 
 ### Safety model
 
 - Dry-run first, always; nothing is written without explicit confirmation.
-- `MANUAL` regions and all content outside the `ENTRIES` area are preserved
-  verbatim; only `GENERATED` regions are overwritten.
-- Writes are atomic (same-directory temp file + atomic replace, re-validated).
-- Applies are gated by a preview fingerprint (repo/branch/HEAD/worktree/worklog
-  hash); a stale or already-used preview is refused.
+- One file per day: re-analysing a day rewrites only that day's file; every other
+  day file is left byte-for-byte untouched.
+- Each day's `MANUAL` region and the index's `MANUAL` region are preserved
+  verbatim; only the generated regions are overwritten.
+- Day-file writes are transactional (all target days stage, validate, and swap in
+  atomically, with rollback), so a failed run never leaves some days updated and
+  others not. The index is written atomically and is always reconstructable from
+  the day files.
+- Applies are gated by a multi-file preview fingerprint (repo/branch/HEAD/worktree
+  + index hash + each day-file hash + the directory listing); a stale or
+  already-used preview is refused.
 - The skill never runs `git add/commit/push/fetch/pull/checkout/switch/merge/rebase`.
 
 ### License
@@ -151,7 +181,8 @@ Released under the [MIT License](LICENSE).
 ## 繁體中文說明
 
 `repo_worklog` 是一個可攜的 agent **skill**，把 Git repository 的**實際程式碼歷史**
-整理成方便人閱讀、**逐日**的**專案工作日誌**，預設寫在 `docs/PROJECT_WORKLOG.md`。
+整理成方便人閱讀、**逐日**的**專案工作日誌**，寫在 `PROJECT_WORKLOG/` 目錄下——
+每天一個 Markdown 檔，另有一份 `index.md` 依日期由新到舊連結各日。
 
 它會閱讀**真正的 diff 與周邊程式碼**——不是只看 commit message——每一天各由一個
 subagent 分析，所有變更都先以 dry-run 預覽，**經你明確確認後才寫入**。它記錄整個專案的
@@ -167,13 +198,26 @@ subagent 分析，所有變更都先以 dry-run 預覽，**經你明確確認後
     - `collect_git_history.py`：repo 中繼資料與逐日 commit 事實（不摘要、不依作者過濾）。
     - `inspect_worktree.py`：staged／unstaged／untracked 與 worktree 指紋。
     - `build_analysis_manifest.py`：檔案分組、所需上下文建議、大日標記。
-    - `update_worklog.py`：模擬／套用插入與覆蓋、保留 MANUAL、原子寫入。
-    - `validate_worklog.py`：標記與 UTF-8 結構驗證。
-    - `preview_state.py`：preview 指紋／ID、apply 前一致性、防重複套用。
-    - `worklog_markers.py`：共用標記解析／序列化模組（由上述三支匯入）。
+    - `update_daily_worklog.py`：建立／覆蓋每日檔案（交易式）、保留 MANUAL。
+    - `rebuild_worklog_index.py`：由日期檔重建 index.md、保留索引 MANUAL。
+    - `validate_daily_worklog.py`：每日檔案的標記／標題／UTF-8 驗證。
+    - `validate_worklog_index.py`：索引標記／排序／連結／UTF-8 驗證。
+    - `preview_state.py`：多檔 preview 指紋、apply 前一致性、防重複套用。
+    - `migrate_legacy_worklog.py`：一次性把舊單檔拆成目錄式。
+    - `worklog_markers.py`：共用的日期檔／索引解析／序列化模組。
   - `references/`：skill 依需求載入的詳細規格（互動流程、日期契約、程式碼分析規則、
     subagent 契約、工作日誌格式、模型設定）。
-- `docs/init_plan.md`：原始設計規格。
+- `docs/init_plan.md`：原始設計規格（單檔時代）。
+
+工作日誌本身寫在 repository 根目錄的 `PROJECT_WORKLOG/`：
+
+```
+PROJECT_WORKLOG/
+├── index.md          # 導航：依日期由新到舊連結各日
+├── 2026-07-15.md     # 一天一個檔
+├── 2026-07-14.md
+└── ...
+```
 
 ### 需求環境
 
@@ -221,9 +265,14 @@ ln -s "$(pwd)/repo_worklog" ~/.claude/skills/repo_worklog
 任何有效請求都會先產生 **dry-run 預覽**與一個 `preview_id`，以「寫入」／「確認更新」／
 `apply <preview_id>` 確認後才會寫入。完整流程見 `repo_worklog/references/interaction-flow.md`。
 
+若專案已有舊的單檔 `docs/PROJECT_WORKLOG.md`，可用 `/repo_worklog migrate`
+（或 `python3 scripts/migrate_legacy_worklog.py`）一次性遷移：它會把每個日期拆成
+`PROJECT_WORKLOG/<date>.md`，先預覽、絕不刪除舊檔，舊標記損壞時則拒絕遷移。
+
 ### 設定
 
-- **輸出檔案**：預設 `docs/PROJECT_WORKLOG.md`（以 `update_worklog.py --target` 覆寫）。
+- **輸出目錄**：預設為 repo 根目錄的 `PROJECT_WORKLOG/`（以
+  `update_daily_worklog.py --dir` ／ `rebuild_worklog_index.py --dir` 覆寫）。
 - **時區**：自動偵測（`$TZ` → `/etc/localtime` → 系統偏移）；可用
   `resolve_date_range.py --timezone Asia/Taipei` 指定。
 - **Subagent 模型**：在 `repo_worklog/agents/openai.yaml` 依宿主設定
@@ -233,10 +282,12 @@ ln -s "$(pwd)/repo_worklog" ~/.claude/skills/repo_worklog
 ### 安全模型
 
 - 一律先 dry-run；未經明確確認絕不寫入。
-- `MANUAL` 區段與 `ENTRIES` 區域外的所有內容都逐字保留；只有 `GENERATED` 會被覆蓋。
-- 寫入採原子方式（同目錄暫存檔＋原子替換，寫入前後皆重新驗證）。
-- Apply 前以 preview 指紋（repo／branch／HEAD／worktree／工作日誌雜湊）把關；
-  過期或已套用的 preview 會被拒絕。
+- 一天一個檔：重新分析某天只會覆寫該天的檔案，其他日期檔逐位元組保持不動。
+- 每天的 `MANUAL` 區段與索引的 `MANUAL` 區段都逐字保留；只有自動產生區段會被覆蓋。
+- 每日檔案採交易式寫入（所有目標日期一起暫存、驗證、原子替換，失敗即 rollback），
+  失敗不會留下「部分日期已更新」的狀態；索引原子寫入，且永遠可由日期檔重建。
+- Apply 前以多檔 preview 指紋把關（repo／branch／HEAD／worktree＋索引雜湊＋各日期檔雜湊＋
+  目錄清單）；過期或已套用的 preview 會被拒絕。
 - Skill 絕不執行 `git add/commit/push/fetch/pull/checkout/switch/merge/rebase`。
 
 ### 測試
@@ -247,8 +298,9 @@ ln -s "$(pwd)/repo_worklog" ~/.claude/skills/repo_worklog
 python3 -m unittest discover -s tests -v
 ```
 
-涵蓋日期契約、Git 收集、工作區檢查、分析 manifest、worklog 引擎（插入／覆蓋／
-MANUAL 保留／損壞拒絕）、preview 一致性與完整確定性管線；CI 也會跑同一套。
+涵蓋日期契約、Git 收集、工作區檢查、分析 manifest、日期檔引擎（建立／覆蓋／
+MANUAL 保留／no-change／損壞拒絕）、索引重建（摘要／排序／MANUAL 保留）、兩支驗證器、
+多檔 preview 一致性、舊檔遷移與完整確定性管線；CI 也會跑同一套。
 
 ### 授權
 

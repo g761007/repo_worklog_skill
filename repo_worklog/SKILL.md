@@ -2,19 +2,20 @@
 name: repo_worklog
 description: >-
   Analyze this Git repository's actual code changes day by day and maintain a
-  human-readable project worklog at docs/PROJECT_WORKLOG.md. Use when the user
-  runs /repo_worklog, or asks to 整理/產生/補 工作日誌, build a per-day work log or
-  changelog, summarize what actually changed in the repo over a date range, or
-  document daily commits for handoff. Reads real diffs and code — never just
-  commit messages. Always previews (dry-run) before writing, and only writes
-  after explicit confirmation.
+  human-readable project worklog under PROJECT_WORKLOG/ (one file per day plus an
+  index.md). Use when the user runs /repo_worklog, or asks to 整理/產生/補 工作日誌,
+  build a per-day work log or changelog, summarize what actually changed in the
+  repo over a date range, or document daily commits for handoff. Reads real diffs
+  and code — never just commit messages. Always previews (dry-run) before writing,
+  and only writes after explicit confirmation.
 ---
 
 # repo_worklog
 
 Produce a **project** worklog (not a personal report) by reading the real Git
-diffs and surrounding code for each day in a requested range, then insert or
-overwrite dated entries in a Markdown worklog while preserving human notes.
+diffs and surrounding code for each day in a requested range, then write one
+Markdown file per day under `PROJECT_WORKLOG/` and refresh `PROJECT_WORKLOG/index.md`,
+while preserving human notes.
 
 The deterministic work (date math, Git collection, Markdown surgery, preview
 integrity) is done by the scripts in `scripts/`. The judgement work (reading
@@ -37,7 +38,10 @@ per-day subagents. **Never let commit messages stand in for reading the diff.**
   count, ask the user to narrow. Never silently truncate.
 - **Dry-run first, always.** Any valid request produces a preview only. Write
   only after the user explicitly confirms.
-- **Preserve MANUAL regions and everything outside the ENTRIES area, forever.**
+- **One file per day; the index is navigation.** Each day is
+  `PROJECT_WORKLOG/<date>.md`; re-analysing one day never touches another day's
+  file. `index.md` is rebuilt from the day files.
+- **Preserve every day's MANUAL region and the index MANUAL region, forever.**
 - **Never run** `git add/commit/push/fetch/pull/checkout/switch/merge/rebase`.
 
 ---
@@ -204,38 +208,60 @@ describe it as committed. In a multi-day range, only today gets a worktree pass.
 
 1. Merge the per-day subagent results. If any day's subagent failed, mark the
    run **partial** and default to blocking apply (see error handling below).
-2. Render each day's Markdown from the day template in
+2. Render each day's GENERATED Markdown from the day template in
    `references/worklog-format.md`. Omit empty sections — no walls of "無/N/A".
-   Days with no changes get no entry by default.
-3. Simulate the update (dry-run is the default — no `--apply`):
+   Days with no changes get no file by default. Lead each day's `當日摘要` with
+   its single most useful sentence — its first line becomes the index summary.
+3. Simulate the day-file writes (dry-run is the default — no `--apply`). Pass
+   `meta` (timezone/branch/short HEAD) and only dates that actually have content:
 
 ```
-python3 scripts/update_worklog.py --target docs/PROJECT_WORKLOG.md <<'JSON'
-{"entries": {"2026-07-15": {"generated_markdown": "..."}, "...": {...}}}
+python3 scripts/update_daily_worklog.py --dir PROJECT_WORKLOG <<'JSON'
+{"meta": {"timezone": "Asia/Taipei", "branch": "main", "head": "abc1234"},
+ "entries": {"2026-07-15": {"generated_markdown": "..."}, "...": {...}}}
 JSON
 ```
 
-Only pass dates that actually have content. The script inserts new dates in
-descending order, overwrites the GENERATED region of existing dates, preserves
-MANUAL, and returns `preview_content`, `diff`, `planned_changes`,
-`preserved_manual_dates`, `original_sha256`, and `preview_sha256`.
+Per date it plans `create` / `overwrite` / `no_change`, preserves MANUAL, and
+returns `planned_changes`, `previews` (full per-day file text), `summaries` (the
+one-line index summary per date), `preserved_manual_dates`, and `file_hashes`
+(`{original, preview}` per date). A corrupt existing day file aborts with
+`CORRUPT_MARKERS` — never guess a repair.
 
-4. Create a preview record so a later apply can be integrity-checked:
+4. Simulate the index rebuild, passing the pending day summaries as `overrides`
+   so the preview reflects the about-to-be-written state without touching disk:
+
+```
+python3 scripts/rebuild_worklog_index.py --dir PROJECT_WORKLOG <<'JSON'
+{"overrides": {"2026-07-15": "新增會員搜尋快取並補充 API 測試", "...": "..."}}
+JSON
+```
+
+It returns the rebuilt `preview`, the descending `dates`, `index_hash`
+(`{original, preview}`), and `preserved_index_manual`.
+
+5. Create a preview record so a later apply can be integrity-checked. The
+   `worklog` fingerprint is now multi-file: the current `index.md` hash, each
+   target day file's hash (or `"missing"`), and a fingerprint of the day-file
+   listing:
 
 ```
 python3 scripts/preview_state.py create <<'JSON'
 {"repository": {"root": "...", "branch": "...", "head": "...",
                 "worktree_fingerprint": "<or omit if not include_uncommitted>"},
- "worklog": {"original_sha256": "...", "preview_sha256": "..."},
+ "worklog": {"index_sha256": "<hash or 'missing'>",
+             "day_files": {"2026-07-15": "<hash or 'missing'>"},
+             "dir_fingerprint": "<hash of the sorted <date>.md listing>"},
  "params": {"mode": "days", "timezone": "...", "include_uncommitted": false}}
 JSON
 ```
 
-5. Show the user the dry-run summary described in
+6. Show the user the dry-run summary described in
    `references/interaction-flow.md`: repository root, branch, HEAD, timezone,
    requested mode, resolved range, `include_uncommitted`, per-day commit counts
-   and status, files analyzed, dates to insert vs overwrite, no-change days,
-   preserved MANUAL dates, the full worklog preview, target path, the
+   and status, files analyzed, per-date planned action (create / overwrite /
+   no-change), the index rebuild, preserved MANUAL dates, each day file's full
+   preview, the index preview, the target directory `PROJECT_WORKLOG/`, the
    `preview_id`, and the line **"No files have been modified."**
 
 ---
@@ -246,49 +272,65 @@ Natural-language confirmations ("寫入", "確認更新", "套用剛才的預覽
 or `apply <preview_id>`.
 
 1. Re-detect repository state and, if `include_uncommitted`, re-run
-   `inspect_worktree.py`. Re-hash the current worklog.
-2. Verify the preview is still valid:
+   `inspect_worktree.py`. Re-hash the current `index.md` and each target day
+   file, and re-fingerprint the day-file listing.
+2. Verify the preview is still valid (pass the same multi-file `worklog` block):
 
 ```
 python3 scripts/preview_state.py verify --id <preview_id> --mark-applied <<'JSON'
 {"repository": {"root": "...", "branch": "...", "head": "...",
                 "worktree_fingerprint": "..."},
- "worklog": {"original_sha256": "<current hash>"},
- "params": {"include_uncommitted": false}}
+ "worklog": {"index_sha256": "<current>",
+             "day_files": {"2026-07-15": "<current or 'missing'>"},
+             "dir_fingerprint": "<current>"},
+ "params": {"timezone": "...", "include_uncommitted": false}}
 JSON
 ```
 
    Exit 3 / `consistent:false` → **do not write.** Report the reason
-   (`already applied`, `expired`, or `state changed since dry-run`) and re-run
-   the dry-run for a fresh preview.
+   (`already applied`, `expired`, or `state changed since dry-run` — including a
+   changed target day file, changed `index.md`, or an added/removed day file) and
+   re-run the dry-run for a fresh preview.
 
-3. Write atomically (same-directory temp file + atomic replace, re-validated
-   before and after the swap):
+3. Write the day files as one transaction (staged, validated, atomically
+   swapped, rolled back on any failure), then rebuild the index:
 
 ```
-python3 scripts/update_worklog.py --target docs/PROJECT_WORKLOG.md --apply <<'JSON'
-{"entries": { ... same entries as the dry-run ... }}
+python3 scripts/update_daily_worklog.py --dir PROJECT_WORKLOG --apply <<'JSON'
+{"meta": { ...same meta... }, "entries": { ...same entries as the dry-run... }}
 JSON
+python3 scripts/rebuild_worklog_index.py --dir PROJECT_WORKLOG --apply
 ```
 
-4. Confirm with `python3 scripts/validate_worklog.py --target docs/PROJECT_WORKLOG.md`,
-   then report the actual update (dates inserted/overwritten, MANUAL preserved,
-   target path). `docs/` is created now if it was missing. Do **not** git add/commit.
+   The day-file write is all-or-nothing. The index is a pure function of the day
+   files, so if the index step ever fails after the day files succeed, re-run
+   `rebuild_worklog_index.py --apply` to repair it — no day data is lost.
+
+4. Confirm with `validate_daily_worklog.py --dir PROJECT_WORKLOG` and
+   `validate_worklog_index.py --dir PROJECT_WORKLOG`, then report the actual
+   update (dates created/overwritten, MANUAL preserved, index rebuilt, target
+   directory). `PROJECT_WORKLOG/` is created now if it was missing. Do **not**
+   git add/commit.
 
 ---
 
 ## 9. Error handling (summary)
 
 - **Not a Git repo / >30 days / corrupt markers / non-UTF-8:** stop, report,
-  never auto-repair. `update_worklog.py` refuses corrupt files
-  (`CORRUPT_MARKERS`); `validate_worklog.py` lists every issue with line numbers.
+  never auto-repair. `update_daily_worklog.py` refuses a corrupt target day file
+  (`CORRUPT_MARKERS`); `rebuild_worklog_index.py` refuses a corrupt `index.md`
+  (`INDEX_CORRUPT_MARKERS`) so its MANUAL is never lost; the validators list every
+  issue.
 - **Unreadable code (permissions, missing submodule):** record what was not
   analyzed, lower `confidence`, note it in `uncertainties`; never fake analysis.
 - **A day's subagent failed:** keep other days, mark the run partial, block apply
   by default. The user may choose to write only the successful days — if so,
   re-run the dry-run with just those dates and mint a new `preview_id`.
-- **Date exists but re-analysis finds no commits:** do not auto-delete the block;
-  show the diff, keep MANUAL, and require explicit confirmation to clear GENERATED.
+- **Date exists but re-analysis finds no commits:** do not auto-delete the day
+  file; show the diff, keep MANUAL, and require explicit confirmation to clear
+  GENERATED.
+- **Legacy `docs/PROJECT_WORKLOG.md` present:** never migrate automatically. Offer
+  `migrate_legacy_worklog.py` (dry-run + confirm); it never deletes the old file.
 
 Full rules: `references/interaction-flow.md`, `references/code-analysis-rules.md`.
 
@@ -302,7 +344,7 @@ Full rules: `references/interaction-flow.md`, `references/code-analysis-rules.md
 | Date modes, timezone, 30-day limit, NL normalisation | `references/date-parameter-contract.md` |
 | Diff reading, context expansion, final-state, merge/revert/rename/binary/lockfile/submodule | `references/code-analysis-rules.md` |
 | Day/Code-Analysis subagent prompts, return schema, confidence, evidence | `references/subagent-contract.md` |
-| Markdown template, markers, insert/overwrite, empty days | `references/worklog-format.md` |
+| Directory layout, day/index markers, create/overwrite, migration | `references/worklog-format.md` |
 | Per-host models and unavailable-model handling | `references/provider-models.md` |
 
 | Script | Role |
@@ -311,7 +353,10 @@ Full rules: `references/interaction-flow.md`, `references/code-analysis-rules.md
 | `collect_git_history.py` | Repo metadata + per-day commit facts (no summaries, no author filter) |
 | `inspect_worktree.py` | Staged/unstaged/untracked + worktree fingerprint (include_uncommitted only) |
 | `build_analysis_manifest.py` | Group changed files, propose required context, flag large days |
-| `update_worklog.py` | Simulate/apply insert & overwrite; preserve MANUAL; atomic write |
-| `validate_worklog.py` | Structural marker & UTF-8 validation |
-| `preview_state.py` | Preview fingerprint, id, apply-time consistency, anti-double-apply |
-| `worklog_markers.py` | Shared marker parser/serialiser (imported by the three above) |
+| `update_daily_worklog.py` | Simulate/apply per-day files (create/overwrite/no-change); preserve MANUAL; transactional write |
+| `rebuild_worklog_index.py` | Rebuild `index.md` from day files (descending, summaries); preserve index MANUAL; atomic write |
+| `validate_daily_worklog.py` | Per-day file marker/title/UTF-8 validation |
+| `validate_worklog_index.py` | Index marker/order/link/UTF-8 validation |
+| `preview_state.py` | Multi-file preview fingerprint, id, apply-time consistency, anti-double-apply |
+| `migrate_legacy_worklog.py` | One-time split of legacy `docs/PROJECT_WORKLOG.md` into `PROJECT_WORKLOG/` |
+| `worklog_markers.py` | Shared day/index parser/serialiser (imported by the scripts above) |
