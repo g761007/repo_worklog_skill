@@ -8,7 +8,8 @@ import subprocess
 import unittest
 
 from helpers import (
-    make_empty_repo, make_history_repo, make_worklog_commit_repo, run_script, rmtree,
+    make_empty_repo, make_history_repo, make_multi_author_repo,
+    make_worklog_commit_repo, run_script, rmtree,
 )
 
 DAY_10 = ["--since", "2026-07-10T00:00:00+08:00", "--until", "2026-07-11T00:00:00+08:00"]
@@ -17,6 +18,8 @@ DAY_02 = ["--since", "2026-07-02T00:00:00+08:00", "--until", "2026-07-03T00:00:0
 DAY_20 = ["--since", "2026-07-20T00:00:00+08:00", "--until", "2026-07-21T00:00:00+08:00"]
 DAY_21 = ["--since", "2026-07-21T00:00:00+08:00", "--until", "2026-07-22T00:00:00+08:00"]
 DAY_22 = ["--since", "2026-07-22T00:00:00+08:00", "--until", "2026-07-23T00:00:00+08:00"]
+AUG_01 = ["--since", "2026-08-01T00:00:00+08:00", "--until", "2026-08-02T00:00:00+08:00"]
+AUG_02 = ["--since", "2026-08-02T00:00:00+08:00", "--until", "2026-08-03T00:00:00+08:00"]
 
 
 class TestCollectGitHistory(unittest.TestCase):
@@ -218,6 +221,75 @@ class TestBuildManifest(unittest.TestCase):
         groups = {g["group"] for g in man["file_groups"]}
         self.assertIn("other:assets/logo.png", groups)
         self.assertTrue(any(g["has_binary"] for g in man["file_groups"]))
+
+
+class TestManifestAuthors(unittest.TestCase):
+    """The manifest must carry who did the work, not just what changed.
+
+    Without this the worklog cannot answer "who wrote this", because the
+    manifest is the Day Subagent's and the orchestrator's only view of the
+    commit list.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo = make_multi_author_repo()
+
+    @classmethod
+    def tearDownClass(cls):
+        rmtree(cls.repo)
+
+    def _manifest(self, day_window, date):
+        hist, _, _ = run_script("collect_git_history.py", ["--repo", self.repo, *day_window])
+        man, _, err = run_script(
+            "build_analysis_manifest.py",
+            ["--date", date, "--timezone", "Asia/Taipei"],
+            stdin=json.dumps(hist),
+        )
+        self.assertTrue(man["ok"], err)
+        return man
+
+    def test_authors_deduped_in_first_appearance_order(self):
+        man = self._manifest(AUG_01, "2026-08-01")
+        # Alice authored the day's first and last commit, Bob the middle one.
+        # Alice must appear once, and first -- ordering by first appearance is
+        # what makes the rendered 參與者 line stable across re-analysis.
+        self.assertEqual(man["authors"], ["Alice Chen", "Bob Lin"])
+
+    def test_single_author_day_lists_author_once(self):
+        man = self._manifest(AUG_02, "2026-08-02")
+        self.assertEqual(man["authors"], ["Carol Wu"])
+
+    def test_each_commit_carries_its_author(self):
+        man = self._manifest(AUG_01, "2026-08-01")
+        by_subject = {c["subject"]: c["author_name"] for c in man["commits"]}
+        self.assertEqual(by_subject, {
+            "feat: add parser": "Alice Chen",
+            "test: cover parser": "Bob Lin",
+            "fix: parser edge case": "Alice Chen",
+        })
+
+    def test_author_not_committer_is_reported(self):
+        # Every fixture commit is committed by "Fixture Bot" but authored by
+        # someone else. Reading the committer would be a plausible mistake that
+        # silently credits the wrong person on any rebased or landed patch.
+        man = self._manifest(AUG_01, "2026-08-01")
+        self.assertNotIn("Fixture Bot", man["authors"])
+
+    def test_no_commit_day_has_empty_authors(self):
+        man = self._manifest(
+            ["--since", "2026-08-05T00:00:00+08:00", "--until", "2026-08-06T00:00:00+08:00"],
+            "2026-08-05",
+        )
+        self.assertEqual(man["authors"], [])
+        self.assertFalse(man["has_changes"])
+
+    def test_author_email_is_not_exposed(self):
+        # The worklog is human-facing prose; emails are PII noise with no
+        # narrative value, so they must stop at the collector.
+        man = self._manifest(AUG_01, "2026-08-01")
+        self.assertNotIn("author_email", man["commits"][0])
+        self.assertNotIn("alice@example.com", json.dumps(man))
 
 
 if __name__ == "__main__":

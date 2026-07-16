@@ -58,12 +58,22 @@ def _write(repo: str, rel: str, data, binary: bool = False) -> None:
         fh.write(data)
 
 
-def _commit(repo: str, date: str, message: str, body: str | None = None) -> None:
+def _commit(repo: str, date: str, message: str, body: str | None = None,
+            author: str | None = None) -> None:
+    """Commit staged work. ``author`` overrides the author (not the committer).
+
+    Passing ``author`` as ``"Name <email>"`` keeps the committer as the repo's
+    configured identity, which mirrors real history (a reviewer landing someone
+    else's patch) and lets tests prove the author -- not the committer -- is
+    what reaches the manifest.
+    """
     _git(repo, "add", "-A")
     env = {"GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date}
     args = ["commit", "-q", "-m", message]
     if body:
         args += ["-m", body]
+    if author:
+        args += ["--author", author]
     _git(repo, *args, env=env)
 
 
@@ -134,6 +144,44 @@ def make_worklog_commit_repo() -> str:
     _write(repo, "src/greet.py", "def greet(name):\n    return f'hello {name}'\n")
     _write(repo, index_file, "# Project Worklog\n\nupdated\n")
     _commit(repo, "2026-07-22T09:00:00+08:00", "chore(docs): mixed worklog + fix")
+
+    return repo
+
+
+def make_multi_author_repo() -> str:
+    """Fixture with a multi-author day and a single-author day.
+
+    Every commit is authored by someone other than the configured committer
+    ("Fixture Bot"), so a test that reads the committer instead of the author
+    fails loudly rather than passing by coincidence.
+
+    Timeline (committer/author dates, Asia/Taipei):
+      2026-08-01  feat: add parser        (Alice Chen)
+      2026-08-01  test: cover parser      (Bob Lin)
+      2026-08-01  fix: parser edge case   (Alice Chen)  <- repeat author, must dedup
+      2026-08-02  docs: document parser   (Carol Wu)    <- single-author day
+    """
+    repo = tempfile.mkdtemp(prefix="rw_authors_")
+    subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
+    _git(repo, "config", "user.name", "Fixture Bot")
+    _git(repo, "config", "user.email", "fixture@example.com")
+    _git(repo, "config", "commit.gpgsign", "false")
+
+    alice = "Alice Chen <alice@example.com>"
+    bob = "Bob Lin <bob@example.com>"
+    carol = "Carol Wu <carol@example.com>"
+
+    _write(repo, "src/parser.py", "def parse(text):\n    return text.split()\n")
+    _commit(repo, "2026-08-01T09:00:00+08:00", "feat: add parser", author=alice)
+
+    _write(repo, "tests/test_parser.py", "def test_parse():\n    assert True\n")
+    _commit(repo, "2026-08-01T11:00:00+08:00", "test: cover parser", author=bob)
+
+    _write(repo, "src/parser.py", "def parse(text):\n    return text.strip().split()\n")
+    _commit(repo, "2026-08-01T15:00:00+08:00", "fix: parser edge case", author=alice)
+
+    _write(repo, "docs/parser.md", "# Parser\n")
+    _commit(repo, "2026-08-02T10:00:00+08:00", "docs: document parser", author=carol)
 
     return repo
 
