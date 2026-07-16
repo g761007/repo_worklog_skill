@@ -95,6 +95,18 @@ _INDEX_MARKER_RE = re.compile(
 )
 # Accept an em dash or a plain hyphen between the title and the date.
 _DAY_TITLE_RE = re.compile(r"^#\s+Project Worklog\s+[—–-]\s+(\d{4}-\d{2}-\d{2})\s*$")
+
+# Brackets the one-line summary inside a day's GENERATED region, so the index
+# can find it without knowing what language the day was written in.
+_SUMMARY_MARKER_RE = re.compile(
+    rf"^<!--\s*{_ANY_PREFIX}:SUMMARY:(START|END)\s*-->$"
+)
+
+# How the summary was found before the marker existed: by its zh-TW heading.
+# Day files written by earlier versions still carry that heading and no marker,
+# and are never rewritten just to gain one — so this stays as the fallback for
+# them. It is not a language rule; it is an artefact of the days when zh-TW was
+# the only language the tool could produce.
 _SUMMARY_HEADING_RE = re.compile(r"^#{1,6}\s*當日摘要\s*$")
 _INDEX_ROW_RE = re.compile(r"^\|\s*\[(\d{4}-\d{2}-\d{2})\]\([^)]*\)\s*\|(.*)\|\s*$")
 
@@ -143,6 +155,11 @@ def contains_marker_line(text: str) -> bool:
     structure (parsing is line-based), so callers reject it up front rather
     than emit a file that fails to re-parse. The legacy prefix counts too: it
     still parses, so it can still corrupt.
+
+    SUMMARY markers are deliberately absent from this check: they nest *inside*
+    a GENERATED region rather than delimiting one, so they cannot corrupt it,
+    and generated content is required to carry them. Adding them here would
+    reject every day the contract asks for.
     """
     for line in text.splitlines():
         s = line.strip()
@@ -487,27 +504,67 @@ class IndexDoc:
 
 
 def summarise_generated(generated_md: str) -> str:
-    """Derive a one-line index summary from a day's 當日摘要 section.
+    """Derive the one-line index summary from a day's GENERATED region.
 
-    Returns the first non-empty, non-heading line under the 當日摘要 heading,
-    collapsed to a single line, table-escaped, and length-capped. Empty string
-    when no summary paragraph is present.
+    Prefers the SUMMARY marker, which says where the summary is without saying
+    what language it is in. That matters because the index is built by scanning
+    every day file, and days may be written in different languages: keying off a
+    heading's text would silently yield an empty summary for any day not written
+    in the language the reader happened to hardcode.
+
+    Falls back to the zh-TW 當日摘要 heading for day files written before the
+    marker existed. Those are never rewritten just to gain one, so the fallback
+    is permanent, not a migration window.
+
+    Returns a single line, table-escaped and length-capped; empty string when
+    there is no summary to find.
     """
-    lines = generated_md.splitlines()
+    marked = _between_summary_markers(generated_md)
+    if marked is not None:
+        return clean_summary(marked)
+
     in_summary = False
-    for raw in lines:
+    for raw in generated_md.splitlines():
         s = raw.strip()
         if _SUMMARY_HEADING_RE.match(s):
             in_summary = True
             continue
         if not in_summary:
             continue
-        if not s:
-            continue
+        if not s or _SUMMARY_MARKER_RE.match(s):
+            continue  # a marker line is structure, not the summary's text
         if s.startswith("#"):
             break  # next section began before any summary text
         return clean_summary(s)
     return ""
+
+
+def _between_summary_markers(generated_md: str) -> "str | None":
+    """The first non-empty line between SUMMARY markers, or None if unmarked.
+
+    An unclosed or empty marker pair returns None rather than an empty summary,
+    so the caller falls back to the heading scan instead of writing a blank row
+    for a day that does have a summary.
+    """
+    collecting = False
+    for raw in generated_md.splitlines():
+        s = raw.strip()
+        m = _SUMMARY_MARKER_RE.match(s)
+        if m:
+            if m.group(1) == "END":
+                break  # closed without content — treat as unmarked
+            collecting = True
+            continue
+        if collecting and s and not s.startswith("#"):
+            return s
+    return None
+
+
+def render_summary(summary: str) -> str:
+    """The SUMMARY-marked block that a day's GENERATED region must carry."""
+    return (f"<!-- {PREFIX}:SUMMARY:START -->\n"
+            f"{summary.strip()}\n"
+            f"<!-- {PREFIX}:SUMMARY:END -->\n")
 
 
 def clean_summary(text: str) -> str:

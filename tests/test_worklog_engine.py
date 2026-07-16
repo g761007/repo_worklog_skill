@@ -99,6 +99,67 @@ class TestMarkers(unittest.TestCase):
         self.assertLessEqual(len(out), wm.SUMMARY_MAX_CHARS)
         self.assertNotIn("| ", out.replace("\\|", ""))  # raw pipes escaped
 
+    def test_marked_summary_is_found_whatever_language_the_day_is_in(self):
+        # The reason the marker exists. Keying off the zh-TW heading meant an
+        # English day produced a blank index row — no error, no warning, just a
+        # missing summary — the moment the language contract let days be
+        # written in anything but Traditional Chinese.
+        gen = ("## Daily summary\n"
+               f"{wm.render_summary('Reworked the token refresh path.')}"
+               "\n## Work items\n")
+        self.assertEqual(wm.summarise_generated(gen),
+                         "Reworked the token refresh path.")
+
+    def test_unmarked_english_day_yields_no_summary(self):
+        # The honest limit of the zh-TW fallback: it can only find a summary in
+        # the language it was hardcoded for. Days written in another language
+        # must carry the marker, which is why the contract requires it.
+        gen = "## Daily summary\n\nReworked the token refresh path.\n"
+        self.assertEqual(wm.summarise_generated(gen), "")
+
+    def test_marker_wins_over_the_legacy_heading(self):
+        gen = ("## 當日摘要\n"
+               f"{wm.render_summary('來自 marker 的摘要。')}"
+               "\n這行不該被當成摘要。\n")
+        self.assertEqual(wm.summarise_generated(gen), "來自 marker 的摘要。")
+
+    def test_marker_cannot_be_hijacked_by_a_participants_line(self):
+        # The ordering that hijacked the index under heading-scanning is inert
+        # once the summary is bracketed: 參與者 sits outside the markers.
+        gen = ("## 當日摘要\n"
+               f"{wm.render_summary('新增會員搜尋快取。')}"
+               "參與者：Alice Chen\n\n## 主要異動\n")
+        self.assertEqual(wm.summarise_generated(gen), "新增會員搜尋快取。")
+
+    def test_unclosed_marker_falls_back_rather_than_blanking_the_row(self):
+        gen = (f"## 當日摘要\n<!-- {wm.PREFIX}:SUMMARY:START -->\n"
+               "標記內的摘要。\n")
+        # START with no END still yields its content: the row is right either way.
+        self.assertEqual(wm.summarise_generated(gen), "標記內的摘要。")
+
+    def test_empty_marker_pair_falls_back_to_the_heading(self):
+        # A day whose markers came out empty still has a summary under the
+        # heading; blanking the row would lose information we hold.
+        gen = (f"## 當日摘要\n<!-- {wm.PREFIX}:SUMMARY:START -->\n"
+               f"<!-- {wm.PREFIX}:SUMMARY:END -->\n\n實際的摘要在這裡。\n")
+        self.assertEqual(wm.summarise_generated(gen), "實際的摘要在這裡。")
+
+    def test_legacy_prefix_summary_marker_still_parses(self):
+        gen = (f"## 當日摘要\n<!-- {wm.LEGACY_PREFIX}:SUMMARY:START -->\n"
+               f"舊前綴的摘要。\n<!-- {wm.LEGACY_PREFIX}:SUMMARY:END -->\n")
+        self.assertEqual(wm.summarise_generated(gen), "舊前綴的摘要。")
+
+    def test_marked_summary_is_escaped_and_capped_like_any_other(self):
+        gen = wm.render_summary("A|B " * 40)
+        out = wm.summarise_generated(gen)
+        self.assertLessEqual(len(out), wm.SUMMARY_MAX_CHARS)
+        self.assertNotIn("| ", out.replace("\\|", ""))
+
+    def test_summary_markers_are_allowed_inside_generated_content(self):
+        # They nest inside a region rather than delimiting one. Rejecting them
+        # would refuse every day the contract asks for.
+        self.assertFalse(wm.contains_marker_line(wm.render_summary("摘要。")))
+
     def test_index_roundtrip_and_order(self):
         rows = [("2026-07-15", "a"), ("2026-07-14", "b")]
         idx = wm.render_index(rows)
