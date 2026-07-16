@@ -186,6 +186,53 @@ def make_multi_author_repo() -> str:
     return repo
 
 
+def make_tagged_repo() -> str:
+    """Fixture with releases cut across several days, for ref-range resolution.
+
+    Mixes an annotated tag with a lightweight one because they are stored
+    differently in Git, and covers a release whose commits span two days plus a
+    day carrying no release at all.
+
+    Timeline (committer/author dates, Asia/Taipei):
+      2026-09-01 09:00  feat: add core          (Alice Chen) -> tag v1.0.0 (annotated)
+      2026-09-02 05:00  feat: add search        (Bob Lin)    <- 2026-09-01 in UTC
+      2026-09-03 11:00  fix: search off-by-one  (Alice Chen) -> tag v1.0.1 (lightweight)
+      2026-09-05 09:00  chore: tidy imports     (Carol Wu)   (untagged, after v1.0.1)
+
+    "feat: add search" sits at 05:00+08:00 deliberately: it falls on a different
+    calendar day under UTC than under Asia/Taipei, so a test can prove the
+    timezone actually drives day attribution.
+    """
+    repo = tempfile.mkdtemp(prefix="rw_tags_")
+    subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
+    _git(repo, "config", "user.name", "Fixture Bot")
+    _git(repo, "config", "user.email", "fixture@example.com")
+    _git(repo, "config", "commit.gpgsign", "false")
+
+    alice = "Alice Chen <alice@example.com>"
+    bob = "Bob Lin <bob@example.com>"
+    carol = "Carol Wu <carol@example.com>"
+
+    _write(repo, "src/core.py", "def core():\n    return 1\n")
+    _commit(repo, "2026-09-01T09:00:00+08:00", "feat: add core", author=alice)
+    # Annotated tags carry their own timestamp; force it so --sort=creatordate
+    # is deterministic rather than dependent on the test-run clock.
+    _git(repo, "tag", "-a", "v1.0.0", "-m", "release 1.0.0",
+         env={"GIT_COMMITTER_DATE": "2026-09-01T18:00:00+08:00"})
+
+    _write(repo, "src/search.py", "def search(q):\n    return [q]\n")
+    _commit(repo, "2026-09-02T05:00:00+08:00", "feat: add search", author=bob)
+
+    _write(repo, "src/search.py", "def search(q):\n    return [q.strip()]\n")
+    _commit(repo, "2026-09-03T11:00:00+08:00", "fix: search off-by-one", author=alice)
+    _git(repo, "tag", "v1.0.1")  # lightweight: sorts by its commit date
+
+    _write(repo, "src/core.py", "import os\n\n\ndef core():\n    return 1\n")
+    _commit(repo, "2026-09-05T09:00:00+08:00", "chore: tidy imports", author=carol)
+
+    return repo
+
+
 def make_empty_repo() -> str:
     """An initialised repo with a committer identity but no commits."""
     repo = tempfile.mkdtemp(prefix="rw_empty_")
