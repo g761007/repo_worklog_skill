@@ -14,10 +14,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from helpers import SCRIPTS, run_script, rmtree
+from helpers import SCRIPTS, run_script, rmtree, day_file
 
 sys.path.insert(0, SCRIPTS)
 import worklog_markers as wm  # noqa: E402
+
+
+def marker(date: str, region: str, edge: str) -> str:
+    """A day marker in the prefix the tools currently write."""
+    return f"<!-- {wm.PREFIX}:{date}:{region}:{edge} -->"
 
 
 def day_entries(mapping: dict, meta: dict | None = None) -> str:
@@ -32,6 +37,7 @@ def read(path: str) -> str:
 
 
 def write(path: str, text: str) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(text, encoding="utf-8")
 
 
@@ -45,8 +51,9 @@ class TestMarkers(unittest.TestCase):
 
     def test_overwrite_preserves_manual_byte_for_byte(self):
         text = wm.render_new_day_file("2026-07-15", "## 當日摘要\n\nfirst")
-        marker = "<!-- REPO_WORKLOG:2026-07-15:MANUAL:START -->\n"
-        text = text.replace(marker, marker + "issue #42 decision\n")
+        m = marker("2026-07-15", "MANUAL", "START") + "\n"
+        text = text.replace(m, m + "issue #42 decision\n")
+        self.assertIn("issue #42", text)   # the fixture actually injected
         before = wm.parse_day(text, "2026-07-15").manual
         out = wm.overwrite_day_generated(text, "2026-07-15", "## 當日摘要\n\nsecond",
                                          timezone="Asia/Taipei", branch="dev", head="ff")
@@ -107,12 +114,20 @@ class TestMarkers(unittest.TestCase):
     def test_contains_marker_line(self):
         # A bare marker line is detected; the same text mid-line is not a marker.
         self.assertTrue(wm.contains_marker_line(
-            "text\n<!-- REPO_WORKLOG:2026-07-15:MANUAL:START -->\n"))
+            f"text\n{marker('2026-07-15', 'MANUAL', 'START')}\n"))
         self.assertTrue(wm.contains_marker_line(
-            "<!-- REPO_WORKLOG:INDEX:GENERATED:START -->"))
+            f"<!-- {wm.PREFIX}:INDEX:GENERATED:START -->"))
         self.assertFalse(wm.contains_marker_line(
-            "see <!-- REPO_WORKLOG:INDEX:GENERATED:START --> inline"))
+            f"see <!-- {wm.PREFIX}:INDEX:GENERATED:START --> inline"))
         self.assertFalse(wm.contains_marker_line("## 當日摘要\n\nplain text"))
+
+    def test_contains_marker_line_still_catches_legacy_prefix(self):
+        # A legacy marker still parses, so it can still corrupt a file: it must
+        # be refused in generated content exactly like the current prefix.
+        self.assertTrue(wm.contains_marker_line(
+            f"text\n<!-- {wm.LEGACY_PREFIX}:2026-07-15:MANUAL:START -->\n"))
+        self.assertTrue(wm.contains_marker_line(
+            f"<!-- {wm.LEGACY_PREFIX}:INDEX:GENERATED:START -->"))
 
     def test_overwrite_preserves_trailing_content(self):
         # Content a user placed after MANUAL:END must survive re-analysis.
@@ -125,10 +140,10 @@ class TestMarkers(unittest.TestCase):
         self.assertNotIn("v1", out)
 
     def test_duplicate_end_marker_detected(self):
+        end = marker("2026-07-15", "GENERATED", "END")
         text = wm.render_new_day_file("2026-07-15", "x").replace(
-            "<!-- REPO_WORKLOG:2026-07-15:GENERATED:END -->",
-            "<!-- REPO_WORKLOG:2026-07-15:GENERATED:END -->\ndup\n"
-            "<!-- REPO_WORKLOG:2026-07-15:GENERATED:END -->")
+            end, f"{end}\ndup\n{end}")
+        self.assertEqual(text.count(end), 2)   # the fixture actually duplicated
         _, issues = wm.scan_day(text, "2026-07-15")
         self.assertIn("DUPLICATE_GENERATED", [i["code"] for i in issues])
 
@@ -136,7 +151,7 @@ class TestMarkers(unittest.TestCase):
 class TestUpdateDaily(unittest.TestCase):
     def setUp(self):
         self.work = tempfile.mkdtemp(prefix="rw_daily_")
-        self.dir = os.path.join(self.work, "PROJECT_WORKLOG")
+        self.dir = os.path.join(self.work, wm.WORKLOG_DIRNAME)
 
     def tearDown(self):
         rmtree(self.work)
@@ -153,8 +168,8 @@ class TestUpdateDaily(unittest.TestCase):
         run_script("update_daily_worklog.py", ["--dir", self.dir, "--apply"],
                    stdin=day_entries({"2026-07-15": "## 當日摘要\n\na",
                                       "2026-07-14": "## 當日摘要\n\nb"}))
-        self.assertTrue(os.path.exists(os.path.join(self.dir, "2026-07-15.md")))
-        self.assertTrue(os.path.exists(os.path.join(self.dir, "2026-07-14.md")))
+        self.assertTrue(os.path.exists(day_file(self.dir, "2026-07-15")))
+        self.assertTrue(os.path.exists(day_file(self.dir, "2026-07-14")))
         v, _, _ = run_script("validate_daily_worklog.py", ["--dir", self.dir])
         self.assertTrue(v["ok"])
         self.assertEqual(v["file_count"], 2)
@@ -163,10 +178,11 @@ class TestUpdateDaily(unittest.TestCase):
         run_script("update_daily_worklog.py", ["--dir", self.dir, "--apply"],
                    stdin=day_entries({"2026-07-15": "## 當日摘要\n\nfirst",
                                       "2026-07-14": "## 當日摘要\n\nkeep"}))
-        p15 = os.path.join(self.dir, "2026-07-15.md")
-        p14 = os.path.join(self.dir, "2026-07-14.md")
-        marker = "<!-- REPO_WORKLOG:2026-07-15:MANUAL:START -->\n"
-        write(p15, read(p15).replace(marker, marker + "issue #42\n"))
+        p15 = day_file(self.dir, "2026-07-15")
+        p14 = day_file(self.dir, "2026-07-14")
+        m = marker("2026-07-15", "MANUAL", "START") + "\n"
+        write(p15, read(p15).replace(m, m + "issue #42\n"))
+        self.assertIn("issue #42", read(p15))   # the fixture actually injected
         before_14 = read(p14)
         d, _, _ = run_script("update_daily_worklog.py", ["--dir", self.dir, "--apply"],
                              stdin=day_entries({"2026-07-15": "## 當日摘要\n\nsecond"}))
@@ -186,7 +202,7 @@ class TestUpdateDaily(unittest.TestCase):
 
     def test_refuses_corrupt_day_file(self):
         os.makedirs(self.dir)
-        write(os.path.join(self.dir, "2026-07-13.md"), "garbage, no markers\n")
+        write(day_file(self.dir, "2026-07-13"), "garbage, no markers\n")
         d, _, _ = run_script("update_daily_worklog.py", ["--dir", self.dir],
                              stdin=day_entries({"2026-07-13": "## 當日摘要\n\nx"}))
         self.assertFalse(d["ok"])
@@ -212,7 +228,7 @@ class TestUpdateDaily(unittest.TestCase):
         # day, and leak no temp files (acceptance criterion: no partial writes).
         import update_daily_worklog as u
         os.makedirs(self.dir)
-        write(os.path.join(self.dir, "2026-07-15.md"),
+        write(day_file(self.dir, "2026-07-15"),
               wm.render_new_day_file("2026-07-15", "## 當日摘要\n\nORIGINAL"))
         writes = u._plan(self.dir, {
             "2026-07-15": {"generated_markdown": "## 當日摘要\n\nNEW"},
@@ -235,16 +251,17 @@ class TestUpdateDaily(unittest.TestCase):
         finally:
             os.replace = real_replace
 
-        remaining = sorted(f for f in os.listdir(self.dir) if f.endswith(".md"))
+        day_dir = wm.days_dir(self.dir, wm.LAYOUT_CURRENT)
+        remaining = sorted(f for f in os.listdir(day_dir) if f.endswith(".md"))
         self.assertEqual(remaining, ["2026-07-15.md"])            # created day dropped
-        self.assertIn("ORIGINAL", read(os.path.join(self.dir, "2026-07-15.md")))  # restored
-        self.assertEqual([f for f in os.listdir(self.dir) if f.startswith(".rw-")], [])
+        self.assertIn("ORIGINAL", read(day_file(self.dir, "2026-07-15")))  # restored
+        self.assertEqual([f for f in os.listdir(day_dir) if f.startswith(".rw-")], [])
 
 
 class TestRebuildIndex(unittest.TestCase):
     def setUp(self):
         self.work = tempfile.mkdtemp(prefix="rw_idx_")
-        self.dir = os.path.join(self.work, "PROJECT_WORKLOG")
+        self.dir = os.path.join(self.work, wm.WORKLOG_DIRNAME)
         run_script("update_daily_worklog.py", ["--dir", self.dir, "--apply"],
                    stdin=day_entries({"2026-07-15": "## 當日摘要\n\nnewest",
                                       "2026-07-13": "## 當日摘要\n\noldest"}))
@@ -286,8 +303,11 @@ class TestRebuildIndex(unittest.TestCase):
     def test_builds_descending_with_summaries(self):
         d, _, _ = run_script("rebuild_worklog_index.py", ["--dir", self.dir, "--apply"], stdin="")
         self.assertEqual(d["dates"], ["2026-07-15", "2026-07-13"])
-        idx = read(os.path.join(self.dir, "index.md"))
-        self.assertIn("[2026-07-15](./2026-07-15.md) | newest", idx)
+        idx = read(wm.index_path(self.dir))
+        # The link must resolve from the index's own directory to days/.
+        self.assertIn(f"[2026-07-15]({wm.day_link('2026-07-15')}) | newest", idx)
+        self.assertTrue(os.path.isfile(
+            os.path.normpath(os.path.join(self.dir, wm.day_link("2026-07-15")))))
         v, _, _ = run_script("validate_worklog_index.py", ["--dir", self.dir])
         self.assertTrue(v["ok"])
 
@@ -300,9 +320,10 @@ class TestRebuildIndex(unittest.TestCase):
 
     def test_preserves_index_manual(self):
         run_script("rebuild_worklog_index.py", ["--dir", self.dir, "--apply"], stdin="")
-        idx_path = os.path.join(self.dir, "index.md")
-        marker = "<!-- REPO_WORKLOG:INDEX:MANUAL:START -->\n"
-        write(idx_path, read(idx_path).replace(marker, marker + "里程碑：v1 上線\n"))
+        idx_path = wm.index_path(self.dir)
+        m = f"<!-- {wm.PREFIX}:INDEX:MANUAL:START -->\n"
+        write(idx_path, read(idx_path).replace(m, m + "里程碑：v1 上線\n"))
+        self.assertIn("里程碑", read(idx_path))   # the fixture actually injected
         run_script("rebuild_worklog_index.py", ["--dir", self.dir, "--apply"], stdin="")
         self.assertIn("里程碑：v1 上線", read(idx_path))
 
@@ -315,7 +336,7 @@ class TestRebuildIndex(unittest.TestCase):
 class TestValidators(unittest.TestCase):
     def setUp(self):
         self.work = tempfile.mkdtemp(prefix="rw_val_")
-        self.dir = os.path.join(self.work, "PROJECT_WORKLOG")
+        self.dir = os.path.join(self.work, wm.WORKLOG_DIRNAME)
         run_script("update_daily_worklog.py", ["--dir", self.dir, "--apply"],
                    stdin=day_entries({"2026-07-15": "## 當日摘要\n\nx"}))
         run_script("rebuild_worklog_index.py", ["--dir", self.dir, "--apply"], stdin="")
@@ -324,7 +345,7 @@ class TestValidators(unittest.TestCase):
         rmtree(self.work)
 
     def test_index_link_missing_is_fatal(self):
-        os.remove(os.path.join(self.dir, "2026-07-15.md"))
+        os.remove(day_file(self.dir, "2026-07-15"))
         v, rc, _ = run_script("validate_worklog_index.py", ["--dir", self.dir])
         self.assertFalse(v["ok"])
         self.assertEqual(rc, 2)
@@ -339,7 +360,7 @@ class TestValidators(unittest.TestCase):
 
     def test_validate_single_day_target(self):
         v, _, _ = run_script("validate_daily_worklog.py",
-                             ["--target", os.path.join(self.dir, "2026-07-15.md")])
+                             ["--target", day_file(self.dir, "2026-07-15")])
         self.assertTrue(v["ok"])
         self.assertEqual(v["date"], "2026-07-15")
 
@@ -398,6 +419,158 @@ class TestPreviewState(unittest.TestCase):
         d, rc, _ = self._verify(wl)
         self.assertFalse(d["consistent"])
         self.assertTrue(any(m["field"] == "index.md content" for m in d["mismatches"]))
+
+
+class TestLayout(unittest.TestCase):
+    """Layout is probed from disk, not inferred from a directory's name."""
+
+    def setUp(self):
+        self.work = tempfile.mkdtemp(prefix="rw_layout_")
+
+    def tearDown(self):
+        rmtree(self.work)
+
+    def test_empty_dir_is_treated_as_current(self):
+        self.assertEqual(wm.detect_layout(self.work), wm.LAYOUT_EMPTY)
+        self.assertEqual(wm.days_dir(self.work, wm.detect_layout(self.work)),
+                         os.path.join(self.work, wm.DAYS_SUBDIR))
+
+    def test_missing_dir_does_not_raise(self):
+        missing = os.path.join(self.work, "nope")
+        self.assertEqual(wm.detect_layout(missing), wm.LAYOUT_EMPTY)
+        self.assertEqual(wm.list_day_dates(missing), [])
+
+    def test_flat_day_files_detect_as_legacy(self):
+        write(os.path.join(self.work, "2026-07-15.md"), "x")
+        self.assertEqual(wm.detect_layout(self.work), wm.LAYOUT_LEGACY)
+        self.assertEqual(wm.day_path(self.work, "2026-07-15"),
+                         os.path.join(self.work, "2026-07-15.md"))
+        self.assertEqual(wm.day_link("2026-07-15", wm.LAYOUT_LEGACY), "./2026-07-15.md")
+
+    def test_days_subdir_detects_as_current(self):
+        write(day_file(self.work, "2026-07-15"), "x")
+        self.assertEqual(wm.detect_layout(self.work), wm.LAYOUT_CURRENT)
+        self.assertEqual(wm.day_link("2026-07-15"), "./days/2026-07-15.md")
+
+    def test_days_subdir_wins_when_both_shapes_present(self):
+        # An interrupted migration leaves the legacy files in place; the
+        # migrated copies are the ones to trust.
+        write(os.path.join(self.work, "2026-07-15.md"), "old")
+        write(day_file(self.work, "2026-07-15"), "new")
+        self.assertEqual(wm.detect_layout(self.work), wm.LAYOUT_CURRENT)
+        self.assertEqual(read(wm.day_path(self.work, "2026-07-15")), "new")
+
+    def test_index_sits_at_the_root_in_both_layouts(self):
+        self.assertEqual(wm.index_path(self.work), os.path.join(self.work, "index.md"))
+
+    def test_list_day_dates_ignores_non_day_files(self):
+        write(day_file(self.work, "2026-07-15"), "x")
+        write(day_file(self.work, "2026-07-13"), "x")
+        write(os.path.join(self.work, wm.DAYS_SUBDIR, "notes.md"), "x")
+        self.assertEqual(wm.list_day_dates(self.work), ["2026-07-13", "2026-07-15"])
+
+
+class TestRetagMarkers(unittest.TestCase):
+    """Re-tagging rewrites marker lines only -- never a worklog's content."""
+
+    def test_day_and_index_markers_are_rewritten(self):
+        text = (f"<!-- {wm.LEGACY_PREFIX}:2026-07-15:GENERATED:START -->\n"
+                f"<!-- {wm.LEGACY_PREFIX}:INDEX:MANUAL:END -->\n")
+        out, n = wm.retag_markers(text)
+        self.assertEqual(n, 2)
+        self.assertNotIn(wm.LEGACY_PREFIX, out)
+        self.assertIn(f"<!-- {wm.PREFIX}:2026-07-15:GENERATED:START -->", out)
+        self.assertIn(f"<!-- {wm.PREFIX}:INDEX:MANUAL:END -->", out)
+
+    def test_prose_mentioning_the_old_prefix_is_untouched(self):
+        # Only whole lines that parse as markers are markers. A day file that
+        # discusses the rename must not be mangled by it.
+        text = (f"我們把 {wm.LEGACY_PREFIX} 改成 {wm.PREFIX}。\n"
+                f"see <!-- {wm.LEGACY_PREFIX}:INDEX:GENERATED:START --> inline\n")
+        out, n = wm.retag_markers(text)
+        self.assertEqual(n, 0)
+        self.assertEqual(out, text)
+
+    def test_already_current_text_is_a_no_op(self):
+        text = wm.render_new_day_file("2026-07-15", "## 當日摘要\n\nX")
+        out, n = wm.retag_markers(text)
+        self.assertEqual(n, 0)
+        self.assertEqual(out, text)
+
+    def test_retagged_legacy_day_parses_and_keeps_manual(self):
+        legacy = (f"# Project Worklog — 2026-07-15\n\n"
+                  f"<!-- {wm.LEGACY_PREFIX}:2026-07-15:GENERATED:START -->\n"
+                  f"## 當日摘要\n\nX\n"
+                  f"<!-- {wm.LEGACY_PREFIX}:2026-07-15:GENERATED:END -->\n\n"
+                  f"<!-- {wm.LEGACY_PREFIX}:2026-07-15:MANUAL:START -->\n"
+                  f"人工筆記\n"
+                  f"<!-- {wm.LEGACY_PREFIX}:2026-07-15:MANUAL:END -->\n")
+        out, _ = wm.retag_markers(legacy)
+        day = wm.parse_day(out, "2026-07-15")
+        self.assertEqual(day.manual, "人工筆記\n")
+        self.assertIn("X", day.generated)
+
+
+class TestDataDirFiles(unittest.TestCase):
+    def setUp(self):
+        self.work = tempfile.mkdtemp(prefix="rw_datadir_")
+        self.dir = os.path.join(self.work, wm.WORKLOG_DIRNAME)
+
+    def tearDown(self):
+        rmtree(self.work)
+
+    def test_apply_creates_version_and_config(self):
+        run_script("update_daily_worklog.py", ["--dir", self.dir, "--apply"],
+                   stdin=day_entries({"2026-07-15": "## 當日摘要\n\nX"}))
+        self.assertEqual(read(wm.version_path(self.dir)).strip(), str(wm.LAYOUT_VERSION))
+        cfg = json.loads(read(wm.config_path(self.dir)))
+        self.assertEqual(cfg["schema_version"], wm.LAYOUT_VERSION)
+        self.assertEqual(cfg["timezone"], "Asia/Taipei")   # taken from meta
+
+    def test_dry_run_creates_neither(self):
+        run_script("update_daily_worklog.py", ["--dir", self.dir],
+                   stdin=day_entries({"2026-07-15": "## 當日摘要\n\nX"}))
+        self.assertFalse(os.path.exists(self.dir))
+
+    def test_existing_config_is_never_rewritten(self):
+        # config.json is user-editable; a second run must not stomp it.
+        os.makedirs(self.dir)
+        write(wm.config_path(self.dir), '{"schema_version": 1, "timezone": "UTC"}\n')
+        run_script("update_daily_worklog.py", ["--dir", self.dir, "--apply"],
+                   stdin=day_entries({"2026-07-15": "## 當日摘要\n\nX"}))
+        self.assertEqual(json.loads(read(wm.config_path(self.dir)))["timezone"], "UTC")
+
+
+class TestLegacyLayoutIsReadableButNotWritable(unittest.TestCase):
+    def setUp(self):
+        self.work = tempfile.mkdtemp(prefix="rw_legacy_")
+        self.dir = os.path.join(self.work, wm.LEGACY_WORKLOG_DIRNAME)
+        write(wm.day_path(self.dir, "2026-07-15", wm.LAYOUT_LEGACY),
+              wm.render_new_day_file("2026-07-15", "## 當日摘要\n\n舊資料"))
+
+    def tearDown(self):
+        rmtree(self.work)
+
+    def test_validator_reads_a_legacy_directory(self):
+        v, _, _ = run_script("validate_daily_worklog.py", ["--dir", self.dir])
+        self.assertTrue(v["ok"])
+        self.assertEqual(v["file_count"], 1)
+
+    def test_index_rebuild_links_to_where_the_files_actually_are(self):
+        run_script("rebuild_worklog_index.py", ["--dir", self.dir, "--apply"], stdin="")
+        idx = read(wm.index_path(self.dir))
+        self.assertIn("(./2026-07-15.md)", idx)      # flat, not days/
+        self.assertTrue(os.path.isfile(
+            os.path.normpath(os.path.join(self.dir, "./2026-07-15.md"))))
+
+    def test_writing_to_a_legacy_directory_is_refused(self):
+        # Writing here would leave the worklog half in each layout.
+        d, rc, _ = run_script("update_daily_worklog.py", ["--dir", self.dir, "--apply"],
+                              stdin=day_entries({"2026-07-16": "## 當日摘要\n\nnew"}))
+        self.assertFalse(d["ok"])
+        self.assertEqual(d["errors"][0]["code"], "LEGACY_LAYOUT")
+        self.assertEqual(rc, 2)
+        self.assertFalse(os.path.exists(wm.days_dir(self.dir, wm.LAYOUT_CURRENT)))
 
 
 if __name__ == "__main__":

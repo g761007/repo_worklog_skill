@@ -8,6 +8,44 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The worklog now lives in `.git-worklog/`, with day files under `days/`.**
+  `PROJECT_WORKLOG/<date>.md` → `.git-worklog/days/<date>.md`;
+  `PROJECT_WORKLOG/index.md` → `.git-worklog/index.md`. The directory also gains
+  a `VERSION` (on-disk layout version) and a `config.json` (`schema_version`,
+  `timezone`, and language fields that are inert until the language contract
+  lands). Both are created on first write or migration and are never rewritten
+  afterwards — `config.json` is yours to edit.
+
+  Markers are re-tagged `REPO_WORKLOG:` → `GIT_WORKLOG:`. The old prefix still
+  *parses*, so a legacy file can be read and migrated — and so it is still
+  refused inside generated content, where it would corrupt a file either way.
+
+  **Migrate with `migrate_legacy_worklog.py`** (or `/git-worklog migrate`), which
+  now handles both legacy shapes: the flat `PROJECT_WORKLOG/` directory
+  (`--from-dir`) and the pre-v0.2 single `docs/PROJECT_WORKLOG.md`
+  (`--from-file`). With neither flag it auto-detects, directory first. Dry-run is
+  still the default, the source is never deleted, and an existing day file is
+  never overwritten.
+
+  A directory migration **copies each day file verbatim apart from its marker
+  lines** — it does not re-render them. Re-rendering would have refreshed the
+  header and destroyed the original `Branch`/`HEAD` the day was analysed at, and
+  a worklog's existing prose and language are not migration's business to rewrite.
+  For the same reason `--timezone` is ignored for `--from-dir`: each day already
+  records its own.
+
+  Reading a not-yet-migrated worklog keeps working — `detect_layout()` probes for
+  the flat shape, so validation, coverage and report mode are unaffected, and the
+  index rebuilds with links to wherever the day files actually are. **Writing**
+  to one is refused with `LEGACY_LAYOUT` rather than leaving the directory half
+  in each layout.
+
+  Commits touching the old `PROJECT_WORKLOG/` are still recognised as the tool's
+  own output and excluded from analysis. Most of a migrated repo's worklog
+  history is in that directory; without this, every one of those commits would
+  come back as real project work and a Day Subagent would summarise "today I
+  wrote the worklog" — the bug fixed in v0.3.1, reintroduced by a rename.
+
 - **Renamed to Git Worklog.** The repository is now `git-worklog`, the skill
   directory is `git-worklog/`, and the skill is invoked with `/git-worklog`.
   Reinstall to `~/.claude/skills/git-worklog` (or re-point your symlink) — an

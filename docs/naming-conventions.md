@@ -66,9 +66,26 @@ underscore form is correct.
 
 | | |
 | --- | --- |
-| Project output | `.git-worklog/` — Planned (PR 2; currently `PROJECT_WORKLOG/`) |
-| User-level state | `~/.git-worklog/` — Planned (PR 2; currently `~/.repo_worklog/`) |
-| Home override env var | `GIT_WORKLOG_HOME` — Planned (PR 2; does not exist yet) |
+| Project output | `.git-worklog/` — Active |
+| Day files | `.git-worklog/days/<date>.md` — Active |
+| Index | `.git-worklog/index.md` — Active |
+| User-level state | `~/.git-worklog/` — Planned (PR 3; currently `~/.repo_worklog/`) |
+| Home override env var | `GIT_WORKLOG_HOME` — Planned (PR 3; does not exist yet) |
+
+The pre-v0.6 project output was a flat `PROJECT_WORKLOG/` with day files at its
+root. It is still **readable** — `detect_layout()` probes for it — but not
+writable; `migrate_legacy_worklog.py --from-dir` converts it.
+
+## File markers
+
+| | |
+| --- | --- |
+| Marker prefix | `GIT_WORKLOG` — Active |
+
+Day and index files carry `<!-- GIT_WORKLOG:<date>:GENERATED:START -->`-style
+markers. The pre-v0.6 `REPO_WORKLOG` prefix still **parses** (so a legacy file
+can be read and migrated, and so it is still refused inside generated content
+where it would corrupt a file) but is never written.
 
 ## Environment variables
 
@@ -77,6 +94,21 @@ underscore form is correct.
 | Model overrides | `GIT_WORKLOG_{ANTHROPIC,OPENAI,GOOGLE}_MODEL` — Planned (PR 3; currently `REPO_WORKLOG_*`) |
 
 `SCREAMING_SNAKE_CASE`, always prefixed `GIT_WORKLOG_`.
+
+## Versions
+
+Distinct numbers that are easy to confuse. See issue #12 for giving the product
+version a single source of truth and shipping v1.0.0.
+
+| | |
+| --- | --- |
+| Product / release version | `openai.yaml` `version:`, git tags, CHANGELOG — currently `0.4.0` |
+| Data-directory layout | `.git-worklog/VERSION` — currently `1` |
+| Config schema | `config.json` `schema_version` — currently `1` |
+
+The layout and schema versions describe the **on-disk data**, not the tool, and
+bump only when a migration is needed. They are deliberately not tied to the
+product version.
 
 ## Form summary
 
@@ -94,6 +126,10 @@ product names. They remain, correctly, in:
 
 - released CHANGELOG entries and git tags v0.1.0–v0.4.0 (history is not
   rewritten),
-- paths that a Planned rename above has not reached yet.
+- paths and identifiers that a Planned rename above has not reached yet,
+- the legacy names the tool must still **recognise** to migrate an old worklog:
+  `PROJECT_WORKLOG/`, `docs/PROJECT_WORKLOG.md`, and the `REPO_WORKLOG` marker
+  prefix. These are load-bearing — deleting them breaks migration for every
+  existing user.
 
-Neither is a bug to be fixed on sight. Check this table first.
+None of these is a bug to be fixed on sight. Check this document first.

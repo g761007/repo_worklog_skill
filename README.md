@@ -1,7 +1,7 @@
 # Git Worklog
 
 A portable agent **skill** that turns a Git repository's real code history into a
-human-readable, per-day **project worklog** under `PROJECT_WORKLOG/` — one
+human-readable, per-day **project worklog** under `.git-worklog/` — one
 Markdown file per day plus an `index.md` that links them newest-first.
 
 It reads the actual diffs and surrounding code — never just commit messages —
@@ -57,14 +57,17 @@ docs/
     └── 2026-07-16-git-worklog-v1-roadmap.md      # the v1.0 rebrand + refactor roadmap
 ```
 
-The worklog itself is written to `PROJECT_WORKLOG/` at the repository root:
+The worklog itself is written to `.git-worklog/` at the repository root:
 
 ```
-PROJECT_WORKLOG/
+.git-worklog/
+├── VERSION           # on-disk layout version
+├── config.json       # project settings (timezone, …)
 ├── index.md          # navigation: a date-descending table linking every day
-├── 2026-07-15.md     # exactly one day per file
-├── 2026-07-14.md
-└── ...
+└── days/
+    ├── 2026-07-15.md # exactly one day per file
+    ├── 2026-07-14.md
+    └── ...
 ```
 
 ### Requirements
@@ -146,12 +149,12 @@ and a cherry-pick can land outside its dates. See
 
 Already have a legacy single-file `docs/PROJECT_WORKLOG.md`? Migrate it once with
 `/git-worklog migrate` (or `python3 scripts/migrate_legacy_worklog.py`). It
-splits each date into `PROJECT_WORKLOG/<date>.md`, previews first, never deletes
+splits each date into `.git-worklog/days/<date>.md`, previews first, never deletes
 the old file, and refuses if the legacy markers are corrupt.
 
 ### Configuration
 
-- **Target directory:** defaults to `PROJECT_WORKLOG/` at the repo root
+- **Target directory:** defaults to `.git-worklog/` at the repo root
   (`update_daily_worklog.py --dir` / `rebuild_worklog_index.py --dir` to override).
 - **Timezone:** auto-detected (`$TZ` → `/etc/localtime` → offset); override with
   `resolve_date_range.py --timezone Asia/Taipei`.
@@ -174,13 +177,13 @@ Each script is standalone and prints one JSON object to stdout:
 cd git-worklog
 python3 scripts/resolve_date_range.py --days 7 --timezone Asia/Taipei --today 2026-07-15
 python3 scripts/collect_git_history.py --repo /path/to/repo --info-only
-python3 scripts/update_daily_worklog.py --dir /tmp/PROJECT_WORKLOG <<'JSON'
+python3 scripts/update_daily_worklog.py --dir /tmp/.git-worklog <<'JSON'
 {"meta": {"timezone": "Asia/Taipei", "branch": "main", "head": "abc1234"},
  "entries": {"2026-07-15": {"generated_markdown": "## 當日摘要\n\n..."}}}
 JSON
-python3 scripts/rebuild_worklog_index.py --dir /tmp/PROJECT_WORKLOG
-python3 scripts/validate_daily_worklog.py --dir /tmp/PROJECT_WORKLOG
-python3 scripts/validate_worklog_index.py --dir /tmp/PROJECT_WORKLOG
+python3 scripts/rebuild_worklog_index.py --dir /tmp/.git-worklog
+python3 scripts/validate_daily_worklog.py --dir /tmp/.git-worklog
+python3 scripts/validate_worklog_index.py --dir /tmp/.git-worklog
 ```
 
 ### Tests
@@ -227,7 +230,7 @@ Released under the [MIT License](LICENSE).
 ## 繁體中文說明
 
 **Git Worklog** 是一個可攜的 agent **skill**，把 Git repository 的**實際程式碼歷史**
-整理成方便人閱讀、**逐日**的**專案工作日誌**，寫在 `PROJECT_WORKLOG/` 目錄下——
+整理成方便人閱讀、**逐日**的**專案工作日誌**，寫在 `.git-worklog/` 目錄下——
 每天一個 Markdown 檔，另有一份 `index.md` 依日期由新到舊連結各日。
 
 它會閱讀**真正的 diff 與周邊程式碼**——不是只看 commit message——每一天各由一個
@@ -264,14 +267,17 @@ subagent 分析，所有變更都先以 dry-run 預覽，**經你明確確認後
   - `2026-07-16-commit-author-and-report-mode.md`：commit 作者與報告模式。
   - `2026-07-16-git-worklog-v1-roadmap.md`：v1.0 更名與重構路線圖。
 
-工作日誌本身寫在 repository 根目錄的 `PROJECT_WORKLOG/`：
+工作日誌本身寫在 repository 根目錄的 `.git-worklog/`：
 
 ```
-PROJECT_WORKLOG/
+.git-worklog/
+├── VERSION           # 磁碟佈局版本
+├── config.json       # 專案設定（時區等）
 ├── index.md          # 導航：依日期由新到舊連結各日
-├── 2026-07-15.md     # 一天一個檔
-├── 2026-07-14.md
-└── ...
+└── days/
+    ├── 2026-07-15.md # 一天一個檔
+    ├── 2026-07-14.md
+    └── ...
 ```
 
 ### 需求環境
@@ -344,11 +350,11 @@ skill 會明講並詢問是否先補齊——**絕不默默降級成摘要 commi
 
 若專案已有舊的單檔 `docs/PROJECT_WORKLOG.md`，可用 `/git-worklog migrate`
 （或 `python3 scripts/migrate_legacy_worklog.py`）一次性遷移：它會把每個日期拆成
-`PROJECT_WORKLOG/<date>.md`，先預覽、絕不刪除舊檔，舊標記損壞時則拒絕遷移。
+`.git-worklog/days/<date>.md`，先預覽、絕不刪除舊檔，舊標記損壞時則拒絕遷移。
 
 ### 設定
 
-- **輸出目錄**：預設為 repo 根目錄的 `PROJECT_WORKLOG/`（以
+- **輸出目錄**：預設為 repo 根目錄的 `.git-worklog/`（以
   `update_daily_worklog.py --dir` ／ `rebuild_worklog_index.py --dir` 覆寫）。
 - **時區**：自動偵測（`$TZ` → `/etc/localtime` → 系統偏移）；可用
   `resolve_date_range.py --timezone Asia/Taipei` 指定。

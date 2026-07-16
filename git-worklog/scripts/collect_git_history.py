@@ -207,9 +207,18 @@ def _is_revert(subject: str, body: str) -> bool:
 
 
 def _in_worklog_dir(path: str, worklog_dir: str) -> bool:
-    """True if ``path`` lives inside the worklog output directory."""
-    prefix = worklog_dir.rstrip("/") + "/"
-    return path == worklog_dir or path.startswith(prefix)
+    """True if ``path`` lives inside the worklog output directory.
+
+    The pre-v0.6 directory counts too, whatever ``worklog_dir`` is now. History
+    predating the migration still touches it, and a commit that only ever wrote
+    the worklog does not become real project work because the directory was
+    later renamed.
+    """
+    for d in {worklog_dir, wm.LEGACY_WORKLOG_DIRNAME}:
+        prefix = d.rstrip("/") + "/"
+        if path == d or path.startswith(prefix):
+            return True
+    return False
 
 
 def collect_commits(repo: str, since: datetime, until: datetime,

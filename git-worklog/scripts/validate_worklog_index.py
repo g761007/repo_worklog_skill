@@ -27,11 +27,11 @@ def _emit(payload: dict) -> None:
 def _disk_dates(worklog_dir: str) -> set[str]:
     if not os.path.isdir(worklog_dir):
         return set()
-    return {d for d in (wm.parse_date_filename(n) for n in os.listdir(worklog_dir)) if d}
+    return set(wm.list_day_dates(worklog_dir))
 
 
 def validate(worklog_dir: str) -> tuple[dict, bool]:
-    index_path = os.path.join(worklog_dir, wm.INDEX_FILENAME)
+    index_path = wm.index_path(worklog_dir)
     try:
         with open(index_path, "rb") as fh:
             raw = fh.read()

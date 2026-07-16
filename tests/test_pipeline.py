@@ -17,7 +17,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from helpers import make_history_repo, run_script, rmtree
+from helpers import make_history_repo, run_script, rmtree, wm
 
 
 def _sha(text: str) -> str:
@@ -81,7 +81,7 @@ class TestPipeline(unittest.TestCase):
         home = tempfile.mkdtemp(prefix="rw_plhome_")
         target_dates = sorted(entries, reverse=True)
         try:
-            wdir = os.path.join(work, "PROJECT_WORKLOG")
+            wdir = os.path.join(work, wm.WORKLOG_DIRNAME)
             meta = {"timezone": "Asia/Taipei",
                     "branch": info["repository"]["branch"],
                     "head": info["repository"]["short_head"]}

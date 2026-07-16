@@ -186,7 +186,7 @@ the user a summary that includes at least all of the following fields:
 - the index rebuild
 - preserved MANUAL sections (day files and the index)
 - each day file's full preview (from `previews`) and the index preview
-- target directory (default `PROJECT_WORKLOG/`)
+- target directory (default `.git-worklog/`)
 - the `preview_id`
 - the line **`No files have been modified.`**
 
@@ -244,17 +244,17 @@ Range:
 2026-07-09 to 2026-07-15
 
 Target directory:
-PROJECT_WORKLOG/
+.git-worklog/
 
 Planned changes:
-- PROJECT_WORKLOG/2026-07-13.md: no changes
-- PROJECT_WORKLOG/2026-07-14.md: overwrite generated section
-- PROJECT_WORKLOG/2026-07-15.md: create new file
-- PROJECT_WORKLOG/index.md: rebuild generated index
+- .git-worklog/days/2026-07-13.md: no changes
+- .git-worklog/days/2026-07-14.md: overwrite generated section
+- .git-worklog/days/2026-07-15.md: create new file
+- .git-worklog/index.md: rebuild generated index
 
 Preserved manual sections:
-- PROJECT_WORKLOG/2026-07-14.md
-- PROJECT_WORKLOG/index.md
+- .git-worklog/days/2026-07-14.md
+- .git-worklog/index.md
 
 No files have been modified.
 
@@ -262,7 +262,7 @@ Preview ID:
 rw-20260715-a81f2c
 ```
 
-The dry-run never creates `PROJECT_WORKLOG/` and never writes anything. The skill
+The dry-run never creates `.git-worklog/` and never writes anything. The skill
 never runs `git add` / `commit` / `push`.
 
 ---
@@ -313,17 +313,17 @@ and re-run the dry-run to mint a fresh preview. Never apply a stale preview.
 When `consistent:true`, apply the same entries, then rebuild the index:
 
 ```
-python3 scripts/update_daily_worklog.py --dir PROJECT_WORKLOG --apply <<'JSON'
+python3 scripts/update_daily_worklog.py --dir .git-worklog --apply <<'JSON'
 {"meta": { ... same meta ... }, "entries": { ... same entries as the dry-run ... }}
 JSON
-python3 scripts/rebuild_worklog_index.py --dir PROJECT_WORKLOG --apply
+python3 scripts/rebuild_worklog_index.py --dir .git-worklog --apply
 ```
 
 The day-file apply is one all-or-nothing transaction (`written_dates` in its
 output); `rebuild_worklog_index.py --apply` then writes `index.md` atomically.
-`PROJECT_WORKLOG/` is created now if it was missing. Then run
-`validate_daily_worklog.py --dir PROJECT_WORKLOG` and
-`validate_worklog_index.py --dir PROJECT_WORKLOG` and report the actual update.
+`.git-worklog/` is created now if it was missing. Then run
+`validate_daily_worklog.py --dir .git-worklog` and
+`validate_worklog_index.py --dir .git-worklog` and report the actual update.
 
 ---
 

@@ -1,21 +1,33 @@
 #!/usr/bin/env python3
-"""One-time migration of the legacy single-file worklog to the directory layout.
+"""One-time migration of a legacy worklog into the ``.git-worklog/`` layout.
 
-The pre-directory skill wrote every day into one ``docs/PROJECT_WORKLOG.md`` file
-delimited by ``REPO_WORKLOG:ENTRIES`` and per-date ``START/END`` markers. This
-script reads that legacy file, splits each date into its own
-``PROJECT_WORKLOG/<date>.md`` (preserving that date's GENERATED and MANUAL text),
-and builds ``PROJECT_WORKLOG/index.md``.
+Two legacy shapes are migrated, because the worklog has moved twice:
+
+**Single file** (``--from-file``, pre-v0.2) — every day lived in one
+``docs/PROJECT_WORKLOG.md`` delimited by ``REPO_WORKLOG:ENTRIES`` and per-date
+``START/END`` markers. Each date is split into its own day file, preserving that
+date's GENERATED and MANUAL text.
+
+**Flat directory** (``--from-dir``, v0.2–v0.5) — ``PROJECT_WORKLOG/<date>.md``
+with the index alongside. Day files move to ``.git-worklog/days/<date>.md`` and
+their markers are re-tagged ``REPO_WORKLOG`` → ``GIT_WORKLOG``. Nothing else in
+a day file changes: the title, meta blockquote, GENERATED prose and MANUAL notes
+are copied byte for byte, so a migration never rewrites a worklog's content or
+its language. The index is rebuilt (its links must now point into ``days/``)
+with its MANUAL region preserved.
+
+With neither flag the source is auto-detected, directory first.
 
 It is **never** invoked by normal runs — only explicitly, via ``/git-worklog
 migrate`` or by running this script. Dry-run is the default. It never deletes the
-legacy file and never overwrites a day file that already exists (those are left
-for the user to reconcile). If the legacy markers are corrupt, it refuses to
-migrate rather than guess.
+source, and never overwrites a day file that already exists (those are left for
+the user to reconcile). If the legacy markers are corrupt, it refuses to migrate
+rather than guess.
 
 Usage:
-    python3 scripts/migrate_legacy_worklog.py [--legacy docs/PROJECT_WORKLOG.md]
-        [--dir PROJECT_WORKLOG] [--timezone Asia/Taipei] [--apply]
+    python3 scripts/migrate_legacy_worklog.py [--from-file docs/PROJECT_WORKLOG.md]
+        [--from-dir PROJECT_WORKLOG] [--dir .git-worklog] [--timezone Asia/Taipei]
+        [--apply]
 
 Output is a single JSON object on stdout.
 """
@@ -33,12 +45,13 @@ import tempfile
 import worklog_markers as wm
 
 DEFAULT_LEGACY = os.path.join("docs", "PROJECT_WORKLOG.md")
+DEFAULT_LEGACY_DIR = wm.LEGACY_WORKLOG_DIRNAME
 DEFAULT_DIR = wm.WORKLOG_DIRNAME
 
 _LEGACY_MARKER_RE = re.compile(
-    r"^<!--\s*REPO_WORKLOG:(\d{4}-\d{2}-\d{2}):(GENERATED|MANUAL):(START|END)\s*-->$"
+    rf"^<!--\s*{wm.LEGACY_PREFIX}:(\d{{4}}-\d{{2}}-\d{{2}}):(GENERATED|MANUAL):(START|END)\s*-->$"
 )
-_ENTRIES_RE = re.compile(r"^<!--\s*REPO_WORKLOG:ENTRIES:(START|END)\s*-->$")
+_ENTRIES_RE = re.compile(rf"^<!--\s*{wm.LEGACY_PREFIX}:ENTRIES:(START|END)\s*-->$")
 
 
 def _emit(payload: dict) -> None:
@@ -116,64 +129,148 @@ def _atomic_write(target: str, content: str, validate) -> None:
             os.unlink(tmp)
 
 
-def run(args: argparse.Namespace) -> int:
-    legacy_path = args.legacy or DEFAULT_LEGACY
-    worklog_dir = args.dir or DEFAULT_DIR
-    if not os.path.exists(legacy_path):
-        _fail("LEGACY_NOT_FOUND", f"Legacy worklog not found: {legacy_path}", target=legacy_path)
-    with open(legacy_path, "rb") as fh:
+def _read_utf8(path: str, what: str) -> str:
+    with open(path, "rb") as fh:
         raw = fh.read()
     try:
-        text = raw.decode("utf-8")
+        return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        _fail("NON_UTF8", f"Legacy worklog is not valid UTF-8: {exc}", target=legacy_path)
+        _fail("NON_UTF8", f"{what} is not valid UTF-8: {exc}", target=path)
+
+
+def _resolve_source(args: argparse.Namespace) -> tuple[str, str]:
+    """Decide what we are migrating from. Returns ``(kind, path)``."""
+    if args.from_dir and args.from_file:
+        _fail("AMBIGUOUS_SOURCE",
+              "Pass only one of --from-dir / --from-file; they are different legacy shapes.")
+    if args.from_dir:
+        return "dir", args.from_dir
+    if args.from_file:
+        return "file", args.from_file
+    # Auto-detect: the flat directory is the newer legacy shape, so prefer it.
+    if wm.detect_layout(DEFAULT_LEGACY_DIR) == wm.LAYOUT_LEGACY:
+        return "dir", DEFAULT_LEGACY_DIR
+    if os.path.exists(DEFAULT_LEGACY):
+        return "file", DEFAULT_LEGACY
+    _fail("LEGACY_NOT_FOUND",
+          f"No legacy worklog found: neither {DEFAULT_LEGACY_DIR}/ (flat directory) "
+          f"nor {DEFAULT_LEGACY} (single file). Pass --from-dir or --from-file.")
+
+
+def _plan_from_file(legacy_path: str, worklog_dir: str, tz: str | None) -> tuple[list, list, dict]:
+    text = _read_utf8(legacy_path, "Legacy worklog")
     try:
         parsed = parse_legacy(text)
     except ValueError as exc:
         _fail("LEGACY_CORRUPT",
               f"Legacy worklog markers are corrupt; refusing to migrate: {exc}",
               target=legacy_path)
-
     if not parsed:
         _fail("LEGACY_EMPTY", "Legacy worklog has no date blocks to migrate.", target=legacy_path)
 
-    tz = args.timezone
     planned: list[dict] = []
-    to_write: list[tuple[str, str]] = []   # (path, content) for dates we will create
+    to_write: list[tuple[str, str]] = []
     summaries: dict[str, str] = {}
     for date in sorted(parsed, reverse=True):
-        gen = parsed[date]["generated"]
-        manual = parsed[date]["manual"]
+        gen, manual = parsed[date]["generated"], parsed[date]["manual"]
         if wm.contains_marker_line(gen):
             _fail("LEGACY_CONTAINS_MARKER",
-                  f"Legacy GENERATED content for {date} contains a REPO_WORKLOG marker "
-                  "line; refusing to migrate rather than produce a corrupt day file.",
+                  f"Legacy GENERATED content for {date} contains a marker line; "
+                  "refusing to migrate rather than produce a corrupt day file.",
                   date=date)
         summaries[date] = wm.summarise_generated(gen)
-        path = os.path.join(worklog_dir, f"{date}.md")
+        path = wm.day_path(worklog_dir, date, wm.LAYOUT_CURRENT)
         if os.path.exists(path):
             planned.append({"date": date, "path": path, "action": "skip-exists"})
             continue
-        content = wm.build_day_file(date, gen, manual, timezone=tz)
         planned.append({"date": date, "path": path, "action": "create"})
-        to_write.append((path, content))
+        to_write.append((path, wm.build_day_file(date, gen, manual, timezone=tz)))
+    return planned, to_write, summaries
+
+
+def _plan_from_dir(src_dir: str, worklog_dir: str) -> tuple[list, list, dict]:
+    """Plan a flat-directory migration: move day files and re-tag their markers.
+
+    Day content is copied verbatim apart from the marker prefix, so the original
+    header metadata (branch, HEAD, timezone) and the prose survive untouched.
+    ``--timezone`` is deliberately ignored here: each day file already records
+    the timezone it was written under, and rewriting it would falsify history.
+    """
+    if os.path.abspath(src_dir) == os.path.abspath(worklog_dir):
+        _fail("SOURCE_IS_TARGET",
+              f"--from-dir and --dir are the same directory ({src_dir}); nothing to migrate.")
+    layout = wm.detect_layout(src_dir)
+    if layout != wm.LAYOUT_LEGACY:
+        _fail("SOURCE_NOT_LEGACY",
+              f"{src_dir} does not hold a flat legacy worklog (no <date>.md files at "
+              f"its root). Detected layout: {layout}.", target=src_dir)
+
+    planned: list[dict] = []
+    to_write: list[tuple[str, str]] = []
+    summaries: dict[str, str] = {}
+    for date in sorted(wm.list_day_dates(src_dir, layout), reverse=True):
+        src = wm.day_path(src_dir, date, layout)
+        text = _read_utf8(src, f"Day file {date}.md")
+        retagged, _ = wm.retag_markers(text)
+        try:
+            day = wm.parse_day(retagged, date)
+        except wm.WorklogFormatError as exc:
+            _fail("DAY_FILE_CORRUPT",
+                  f"Day file {date}.md has corrupt/missing markers; refusing to migrate "
+                  "rather than guess a repair.", target=src, issues=exc.issues)
+        summaries[date] = wm.summarise_generated(day.generated)
+        dst = wm.day_path(worklog_dir, date, wm.LAYOUT_CURRENT)
+        if os.path.exists(dst):
+            planned.append({"date": date, "path": dst, "action": "skip-exists"})
+            continue
+        planned.append({"date": date, "path": dst, "action": "create", "source": src})
+        to_write.append((dst, retagged))
+    if not to_write and not planned:
+        _fail("LEGACY_EMPTY", f"{src_dir} has no day files to migrate.", target=src_dir)
+    return planned, to_write, summaries
+
+
+def _source_index_manual(kind: str, src: str, worklog_dir: str) -> str | None:
+    """The MANUAL region to carry into the new index.
+
+    The target's own index wins if it exists; otherwise a flat source's index
+    donates its MANUAL so hand-written navigation notes survive the move.
+    """
+    target_index = wm.index_path(worklog_dir)
+    for path, why in ((target_index, "An existing index.md"),
+                      (wm.index_path(src) if kind == "dir" else None, "The source index.md")):
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            return wm.parse_index(_read_utf8(path, "index.md")).manual
+        except wm.WorklogFormatError as exc:
+            _fail("INDEX_CORRUPT_MARKERS",
+                  f"{why} has corrupt markers; refusing to migrate rather than "
+                  f"discard its MANUAL region: {exc}", target=path)
+    return None
+
+
+def run(args: argparse.Namespace) -> int:
+    kind, source = _resolve_source(args)
+    worklog_dir = args.dir or DEFAULT_DIR
+    if not os.path.exists(source):
+        _fail("LEGACY_NOT_FOUND", f"Legacy worklog not found: {source}", target=source)
+
+    if kind == "dir":
+        planned, to_write, summaries = _plan_from_dir(source, worklog_dir)
+    else:
+        planned, to_write, summaries = _plan_from_file(source, worklog_dir, args.timezone)
 
     # Preview the rebuilt index over all migrated dates (existing + to-create).
-    index_path = os.path.join(worklog_dir, wm.INDEX_FILENAME)
-    existing_manual = None
-    if os.path.exists(index_path):
-        try:
-            existing_manual = wm.parse_index(
-                open(index_path, encoding="utf-8").read()).manual
-        except (wm.WorklogFormatError, UnicodeDecodeError) as exc:
-            _fail("INDEX_CORRUPT_MARKERS",
-                  "An existing index.md has corrupt markers; refusing to migrate rather "
-                  f"than discard its MANUAL region: {exc}", target=index_path)
+    index_path = wm.index_path(worklog_dir)
+    existing_manual = _source_index_manual(kind, source, worklog_dir)
     rows = [(d, summaries[d]) for d in sorted(summaries, reverse=True)]
-    index_content = wm.render_index(rows, existing_manual)
+    index_content = wm.render_index(rows, existing_manual, wm.LAYOUT_CURRENT)
 
     common = {
-        "legacy_path": legacy_path,
+        "source": source,
+        "source_kind": kind,
+        "legacy_path": source,   # retained for callers written against the old key
         "worklog_dir": worklog_dir,
         "index_path": index_path,
         "planned_changes": planned,
@@ -184,8 +281,9 @@ def run(args: argparse.Namespace) -> int:
     if not args.apply:
         _emit({"ok": True, "mode": "dry-run", **common,
                "index_preview": index_content,
-               "note": ("No files have been modified. The legacy file is never "
-                        "deleted; existing day files are never overwritten.")})
+               "config_preview": wm.render_config(args.timezone),
+               "note": ("No files have been modified. The source is never deleted; "
+                        "existing day files are never overwritten.")})
         return 0
 
     # Write the new day files (and index) atomically; on any failure remove the
@@ -197,6 +295,7 @@ def run(args: argparse.Namespace) -> int:
                           lambda t, d=os.path.basename(path)[:-3]: wm.parse_day(t, d))
             created.append(path)
         _atomic_write(index_path, index_content, wm.parse_index)
+        created.extend(wm.ensure_data_dir(worklog_dir, args.timezone))
     except Exception as exc:
         for path in created:
             try:
@@ -209,17 +308,26 @@ def run(args: argparse.Namespace) -> int:
 
     _emit({"ok": True, "mode": "apply", **common,
            "created_dates": [os.path.basename(p)[:-3] for p, _ in to_write],
-           "note": ("Migration written. The legacy file was NOT deleted — review the "
-                    "new PROJECT_WORKLOG/ directory, then remove docs/PROJECT_WORKLOG.md "
-                    "yourself if you are satisfied. No git add / commit / push was performed.")})
+           "note": (f"Migration written to {worklog_dir}/. The source ({source}) was NOT "
+                    "deleted — review the result, then remove it yourself if you are "
+                    "satisfied. No git add / commit / push was performed.")})
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Migrate a legacy single-file worklog to PROJECT_WORKLOG/.")
-    p.add_argument("--legacy", help=f"Legacy worklog path (default: {DEFAULT_LEGACY}).")
+    p = argparse.ArgumentParser(
+        description=f"Migrate a legacy worklog into {DEFAULT_DIR}/.")
+    p.add_argument("--from-dir", dest="from_dir",
+                   help=f"Flat legacy worklog directory, v0.2-v0.5 (default: {DEFAULT_LEGACY_DIR}).")
+    p.add_argument("--from-file", dest="from_file",
+                   help=f"Single-file legacy worklog, pre-v0.2 (default: {DEFAULT_LEGACY}).")
+    p.add_argument("--legacy", dest="from_file",
+                   help="Deprecated alias for --from-file.")
     p.add_argument("--dir", help=f"Target worklog directory (default: {DEFAULT_DIR}).")
-    p.add_argument("--timezone", help="Timezone to record in each migrated day file's header.")
+    p.add_argument("--timezone",
+                   help="Timezone recorded in config.json, and in each day file's header "
+                        "when migrating from a single file. Ignored for --from-dir, whose "
+                        "day files already record their own.")
     p.add_argument("--apply", action="store_true",
                    help="Write the migration. Without this flag the run is a dry-run.")
     return p

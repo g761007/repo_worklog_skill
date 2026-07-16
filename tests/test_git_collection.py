@@ -9,7 +9,7 @@ import unittest
 
 from helpers import (
     make_empty_repo, make_history_repo, make_multi_author_repo,
-    make_worklog_commit_repo, run_script, rmtree,
+    make_worklog_commit_repo, run_script, rmtree, wm,
 )
 
 DAY_10 = ["--since", "2026-07-10T00:00:00+08:00", "--until", "2026-07-11T00:00:00+08:00"]
@@ -132,6 +132,45 @@ class TestWorklogSelfReferentialExclusion(unittest.TestCase):
                              ["--repo", self.repo, "--worklog-dir", "SOME_OTHER_DIR", *DAY_21])
         self.assertEqual(d["commit_count"], 1)
         self.assertEqual(d["commits"][0]["subject"], "chore(docs): worklog day21 only")
+
+
+class TestLegacyWorklogDirStillExcluded(unittest.TestCase):
+    """Worklog commits written before the .git-worklog migration stay excluded.
+
+    Most of a migrated repo's worklog history touches PROJECT_WORKLOG/, not
+    .git-worklog/. If the collector only knew the current directory, every one
+    of those commits would come back as real project work and a Day Subagent
+    would happily summarise "today I wrote the worklog" -- the exact bug fixed
+    in v0.3.1, reintroduced by the rename.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo = make_worklog_commit_repo(wm.LEGACY_WORKLOG_DIRNAME)
+
+    @classmethod
+    def tearDownClass(cls):
+        rmtree(cls.repo)
+
+    def test_legacy_worklog_only_day_has_no_commits(self):
+        d, _, _ = run_script("collect_git_history.py", ["--repo", self.repo, *DAY_21])
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["commit_count"], 0)
+
+    def test_legacy_worklog_only_commit_excluded_on_mixed_day(self):
+        d, _, _ = run_script("collect_git_history.py", ["--repo", self.repo, *DAY_20])
+        self.assertEqual([c["subject"] for c in d["commits"]], ["feat: add greet.py"])
+
+    def test_legacy_mixed_commit_keeps_only_real_files(self):
+        d, _, _ = run_script("collect_git_history.py", ["--repo", self.repo, *DAY_22])
+        self.assertEqual([f["path"] for f in d["commits"][0]["files"]], ["src/greet.py"])
+
+    def test_legacy_exclusion_survives_a_worklog_dir_override(self):
+        # --worklog-dir says where the worklog is *now*; the tool's own former
+        # output directory is excluded regardless.
+        d, _, _ = run_script("collect_git_history.py",
+                             ["--repo", self.repo, "--worklog-dir", "SOME_OTHER_DIR", *DAY_21])
+        self.assertEqual(d["commit_count"], 0)
 
     def test_manifest_has_no_changes_for_worklog_only_day(self):
         hist, _, _ = run_script("collect_git_history.py", ["--repo", self.repo, *DAY_21])

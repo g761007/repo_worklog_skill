@@ -2,7 +2,7 @@
 name: git-worklog
 description: >-
   Analyze this Git repository's actual code changes day by day, maintain a
-  human-readable project worklog under PROJECT_WORKLOG/ (one file per day plus an
+  human-readable project worklog under .git-worklog/ (one file per day plus an
   index.md), and answer questions from it. Use when the user runs /git-worklog,
   or asks to 整理/產生/補 工作日誌, build a per-day work log, summarize what actually
   changed in the repo over a date range, or document daily commits for handoff —
@@ -18,7 +18,7 @@ description: >-
 
 Produce a **project** worklog (not a personal report) by reading the real Git
 diffs and surrounding code for each day in a requested range, then write one
-Markdown file per day under `PROJECT_WORKLOG/` and refresh `PROJECT_WORKLOG/index.md`,
+Markdown file per day under `.git-worklog/` and refresh `.git-worklog/index.md`,
 while preserving human notes.
 
 The deterministic work (date math, Git collection, Markdown surgery, preview
@@ -50,7 +50,7 @@ per-day subagents. **Never let commit messages stand in for reading the diff.**
 - **Dry-run first, always.** Any valid request produces a preview only. Write
   only after the user explicitly confirms.
 - **One file per day; the index is navigation.** Each day is
-  `PROJECT_WORKLOG/<date>.md`; re-analysing one day never touches another day's
+  `.git-worklog/days/<date>.md`; re-analysing one day never touches another day's
   file. `index.md` is rebuilt from the day files.
 - **Preserve every day's MANUAL region and the index MANUAL region, forever.**
 - **Never run** `git add/commit/push/fetch/pull/checkout/switch/merge/rebase`.
@@ -300,7 +300,7 @@ describe it as committed. In a multi-day range, only today gets a worktree pass.
    `meta` (timezone/branch/short HEAD) and only dates that actually have content:
 
 ```
-python3 scripts/update_daily_worklog.py --dir PROJECT_WORKLOG <<'JSON'
+python3 scripts/update_daily_worklog.py --dir .git-worklog <<'JSON'
 {"meta": {"timezone": "Asia/Taipei", "branch": "main", "head": "abc1234"},
  "entries": {"2026-07-15": {"generated_markdown": "..."}, "...": {...}}}
 JSON
@@ -316,7 +316,7 @@ one-line index summary per date), `preserved_manual_dates`, and `file_hashes`
    so the preview reflects the about-to-be-written state without touching disk:
 
 ```
-python3 scripts/rebuild_worklog_index.py --dir PROJECT_WORKLOG <<'JSON'
+python3 scripts/rebuild_worklog_index.py --dir .git-worklog <<'JSON'
 {"overrides": {"2026-07-15": "新增會員搜尋快取並補充 API 測試", "...": "..."}}
 JSON
 ```
@@ -347,7 +347,7 @@ JSON
    disabled), per-day commit counts and status, files analyzed, per-date planned
    action (create / overwrite / no-change), the index rebuild, preserved MANUAL
    dates, each day file's full preview, the index preview, the target directory
-   `PROJECT_WORKLOG/`, the `preview_id`, and the line
+   `.git-worklog/`, the `preview_id`, and the line
    **"No files have been modified."**
 
 ---
@@ -382,20 +382,20 @@ JSON
    swapped, rolled back on any failure), then rebuild the index:
 
 ```
-python3 scripts/update_daily_worklog.py --dir PROJECT_WORKLOG --apply <<'JSON'
+python3 scripts/update_daily_worklog.py --dir .git-worklog --apply <<'JSON'
 {"meta": { ...same meta... }, "entries": { ...same entries as the dry-run... }}
 JSON
-python3 scripts/rebuild_worklog_index.py --dir PROJECT_WORKLOG --apply
+python3 scripts/rebuild_worklog_index.py --dir .git-worklog --apply
 ```
 
    The day-file write is all-or-nothing. The index is a pure function of the day
    files, so if the index step ever fails after the day files succeed, re-run
    `rebuild_worklog_index.py --apply` to repair it — no day data is lost.
 
-4. Confirm with `validate_daily_worklog.py --dir PROJECT_WORKLOG` and
-   `validate_worklog_index.py --dir PROJECT_WORKLOG`, then report the actual
+4. Confirm with `validate_daily_worklog.py --dir .git-worklog` and
+   `validate_worklog_index.py --dir .git-worklog`, then report the actual
    update (dates created/overwritten, MANUAL preserved, index rebuilt, target
-   directory). `PROJECT_WORKLOG/` is created now if it was missing. Do **not**
+   directory). `.git-worklog/` is created now if it was missing. Do **not**
    git add/commit.
 
 ---
@@ -415,8 +415,15 @@ python3 scripts/rebuild_worklog_index.py --dir PROJECT_WORKLOG --apply
 - **Date exists but re-analysis finds no commits:** do not auto-delete the day
   file; show the diff, keep MANUAL, and require explicit confirmation to clear
   GENERATED.
-- **Legacy `docs/PROJECT_WORKLOG.md` present:** never migrate automatically. Offer
-  `migrate_legacy_worklog.py` (dry-run + confirm); it never deletes the old file.
+- **A legacy worklog is present:** never migrate automatically. Offer
+  `migrate_legacy_worklog.py` (dry-run + confirm); it never deletes the source.
+  Two shapes qualify — a flat `PROJECT_WORKLOG/` directory (`--from-dir`) and the
+  single `docs/PROJECT_WORKLOG.md` (`--from-file`). With neither flag the script
+  auto-detects, directory first.
+- **Writing refused with `LEGACY_LAYOUT`:** the target directory still holds its
+  day files at the root rather than under `days/`. Do not work around it by
+  passing a different `--dir` — offer the migration. Reading a legacy directory
+  (validate, coverage, report mode) keeps working untouched.
 
 Full rules: `references/interaction-flow.md`, `references/code-analysis-rules.md`.
 
@@ -449,5 +456,5 @@ Full rules: `references/interaction-flow.md`, `references/code-analysis-rules.md
 | `validate_daily_worklog.py` | Per-day file marker/title/UTF-8 validation |
 | `validate_worklog_index.py` | Index marker/order/link/UTF-8 validation |
 | `preview_state.py` | Multi-file preview fingerprint, id, apply-time consistency, anti-double-apply |
-| `migrate_legacy_worklog.py` | One-time split of legacy `docs/PROJECT_WORKLOG.md` into `PROJECT_WORKLOG/` |
+| `migrate_legacy_worklog.py` | One-time migration of a legacy worklog (flat `PROJECT_WORKLOG/`, or the single `docs/PROJECT_WORKLOG.md`) into `.git-worklog/` |
 | `worklog_markers.py` | Shared day/index parser/serialiser (imported by the scripts above) |

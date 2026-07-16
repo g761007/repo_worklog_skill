@@ -4,7 +4,7 @@ How the skill answers a **question** about the project's history — "幫我整�
 工作摘要", "整理 v1.0.1 CHANGELOG" — instead of producing worklog files.
 
 Report mode is **read-only**. It reads the day files already under
-`PROJECT_WORKLOG/` plus Git facts, and returns prose **in the conversation**. It
+`.git-worklog/` plus Git facts, and returns prose **in the conversation**. It
 writes nothing, so there is no dry-run, no `preview_id`, and no confirmation
 gate. The one path that can write is backfilling a gap, and that hands off to the
 ordinary generation pipeline with its own dry-run and confirmation (§4).
@@ -98,7 +98,7 @@ Before writing a single line of report, establish what is actually backed by
 analysis:
 
 ```
-python3 scripts/check_worklog_coverage.py --repo <root> --dir PROJECT_WORKLOG \
+python3 scripts/check_worklog_coverage.py --repo <root> --dir .git-worklog \
     --dates 2026-07-13,2026-07-14,2026-07-15 --timezone <tz>
 ```
 
@@ -111,7 +111,7 @@ Feed it the scope's dates (from either scope). Per date it returns a `status`:
 | `no-commits` | no commits, so no file is expected | nothing missing; ignore |
 
 **`no-commits` is not a gap.** `worklog-format.md` §6 gives a commitless day no
-file deliberately. Days whose only commits edited `PROJECT_WORKLOG/` also land
+file deliberately. Days whose only commits edited `.git-worklog/` also land
 here — the collector drops them as self-referential — so a worklog-only day is
 never offered for backfill.
 
@@ -169,7 +169,7 @@ Never present a message-derived paragraph in the same voice as an analysed one.
 
 ## 5. Producing the report
 
-The orchestrator reads the covered day files directly (`PROJECT_WORKLOG/<date>.md`
+The orchestrator reads the covered day files directly (`.git-worklog/days/<date>.md`
 — plain Markdown) and synthesises the answer itself. **Do not spawn a subagent
 for synthesis:** the day files are already digested analysis, so another agent
 only adds a layer of paraphrase and a chance to lose detail. The only subagents
@@ -184,7 +184,7 @@ Rules:
 - **Attribute where it matters.** Day files carry `參與者` and per-commit authors
   (`worklog-format.md` §3).
 - **Cite dates.** A reader must be able to reach the underlying day file, so
-  reference `PROJECT_WORKLOG/<date>.md` for anything substantive.
+  reference `.git-worklog/days/<date>.md` for anything substantive.
 - **Never invent.** If the day files do not support a claim, say so instead of
   reaching for the commit log.
 - Uncertainty is reported, not smoothed over — the same discipline as
@@ -237,4 +237,4 @@ The worklog **stores** every author, always — that rule is unchanged
 | A day file has corrupt markers | Report it and skip that day; never guess a repair (`worklog-format.md` §8). |
 
 Report mode never runs `git add/commit/push/fetch/pull/checkout/switch/merge/rebase`,
-and never writes to `PROJECT_WORKLOG/` except through the backfill pipeline.
+and never writes to `.git-worklog/` except through the backfill pipeline.

@@ -22,6 +22,16 @@ sys.path.insert(0, SCRIPTS)
 import worklog_markers as wm  # noqa: E402
 
 
+def day_file(worklog_dir: str, date: str) -> str:
+    """Path of a day file in the current layout (``<dir>/days/<date>.md``)."""
+    return wm.day_path(worklog_dir, date, wm.LAYOUT_CURRENT)
+
+
+def legacy_day_file(worklog_dir: str, date: str) -> str:
+    """Path of a day file in the pre-v0.6 flat layout (``<dir>/<date>.md``)."""
+    return wm.day_path(worklog_dir, date, wm.LAYOUT_LEGACY)
+
+
 def run_script(name: str, args: list[str], stdin: str | None = None,
                env: dict | None = None):
     """Run a skill script and return (parsed_json_or_None, returncode, stderr)."""
@@ -113,23 +123,28 @@ def make_history_repo() -> str:
     return repo
 
 
-def make_worklog_commit_repo() -> str:
+def make_worklog_commit_repo(worklog_dirname: str | None = None) -> str:
     """Fixture mixing real work with self-referential worklog-output commits.
+
+    ``worklog_dirname`` defaults to the current output directory; pass
+    ``wm.LEGACY_WORKLOG_DIRNAME`` to build the history a repo has when its
+    worklog commits predate the migration.
 
     Timeline (committer/author dates, Asia/Taipei):
       2026-07-20  feat: add greet.py                  (A src/greet.py)
-      2026-07-20  chore(docs): worklog day20           (A PROJECT_WORKLOG/*.md; worklog-only)
-      2026-07-21  chore(docs): worklog day21 only       (M PROJECT_WORKLOG/*.md; worklog-only, sole commit of the day)
-      2026-07-22  chore(docs): mixed worklog + fix      (M PROJECT_WORKLOG/index.md, M src/greet.py)
+      2026-07-20  chore(docs): worklog day20           (A <worklog>/*.md; worklog-only)
+      2026-07-21  chore(docs): worklog day21 only       (M <worklog>/*.md; worklog-only, sole commit of the day)
+      2026-07-22  chore(docs): mixed worklog + fix      (M <worklog>/index.md, M src/greet.py)
     """
+    dirname = worklog_dirname or wm.WORKLOG_DIRNAME
     repo = tempfile.mkdtemp(prefix="rw_wlog_")
     subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
     _git(repo, "config", "user.name", "Fixture Bot")
     _git(repo, "config", "user.email", "fixture@example.com")
     _git(repo, "config", "commit.gpgsign", "false")
 
-    day_file = f"{wm.WORKLOG_DIRNAME}/2026-07-20.md"
-    index_file = f"{wm.WORKLOG_DIRNAME}/{wm.INDEX_FILENAME}"
+    day_file = f"{dirname}/2026-07-20.md"
+    index_file = f"{dirname}/{wm.INDEX_FILENAME}"
 
     _write(repo, "src/greet.py", "def greet(name):\n    return f'hi {name}'\n")
     _commit(repo, "2026-07-20T09:00:00+08:00", "feat: add greet.py")

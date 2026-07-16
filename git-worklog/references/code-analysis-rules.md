@@ -259,7 +259,7 @@ inside it — say it was not analyzed and lower confidence accordingly.
 ### 6.8 Self-referential worklog commits
 
 `collect_git_history.py` already drops commits that touch **only** the worklog
-output directory (`PROJECT_WORKLOG/` by default — the `WORKLOG_DIRNAME` constant
+output directory (`.git-worklog/` by default — the `WORKLOG_DIRNAME` constant
 in `worklog_markers.py`) before you ever see them: e.g. a
 `chore(docs): 補充 XX 專案工作日誌` commit that only edits day files and
 `index.md`. Such a commit never appears in `commits[]`, is never counted in

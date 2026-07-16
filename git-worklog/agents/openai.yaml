@@ -61,8 +61,8 @@ capabilities:
   reads_git_history: true
   reads_source_code: true
   writes_files:
-    - PROJECT_WORKLOG/index.md
-    - PROJECT_WORKLOG/<date>.md
+    - .git-worklog/index.md
+    - .git-worklog/days/<date>.md
   never_runs:
     - git add
     - git commit

@@ -4,15 +4,18 @@ This document defines the on-disk format of the project worklog produced by the
 `git-worklog` skill. The worklog is a **directory**, not one growing file:
 
 ```text
-PROJECT_WORKLOG/
+.git-worklog/
+├── VERSION           # on-disk layout version (currently 1)
+├── config.json       # project settings (schema_version, timezone, …)
 ├── index.md          # navigation: a date-descending table linking every day
-├── 2026-07-15.md     # exactly one day per file
-├── 2026-07-14.md
-├── 2026-07-13.md
-└── ...
+└── days/
+    ├── 2026-07-15.md # exactly one day per file
+    ├── 2026-07-14.md
+    ├── 2026-07-13.md
+    └── ...
 ```
 
-Each day lives in its own `PROJECT_WORKLOG/<date>.md`. Re-analysing one day
+Each day lives in its own `.git-worklog/days/<date>.md`. Re-analysing one day
 rewrites only that day's file; no other date file is read or touched. `index.md`
 is rebuilt from the day files and is pure navigation. This replaces the earlier
 single `docs/PROJECT_WORKLOG.md`, which grew without bound, produced huge diffs,
@@ -40,19 +43,19 @@ in the worklog files.
 ### Default location
 
 ```text
-PROJECT_WORKLOG/            # at the repository root
-PROJECT_WORKLOG/index.md
-PROJECT_WORKLOG/<date>.md   # <date> is an ISO YYYY-MM-DD calendar date
+.git-worklog/            # at the repository root
+.git-worklog/index.md
+.git-worklog/days/<date>.md   # <date> is an ISO YYYY-MM-DD calendar date
 ```
 
 Override the directory with `update_daily_worklog.py --dir` /
-`rebuild_worklog_index.py --dir`. If `PROJECT_WORKLOG/` does not exist:
+`rebuild_worklog_index.py --dir`. If `.git-worklog/` does not exist:
 
 - **dry-run must NOT create it.** A preview never touches the filesystem — no
   directory, no file. The dry-run output reports `dir_exists` so the preview can
   say the directory is still missing.
 - **apply creates the directory and the files.** Only when the user confirms and
-  the tool runs with `--apply` is `PROJECT_WORKLOG/` created and written.
+  the tool runs with `--apply` is `.git-worklog/` created and written.
 
 ---
 
@@ -70,13 +73,13 @@ and spacing are all significant. Do not paraphrase them.
 > Branch：main
 > HEAD：abc1234
 
-<!-- REPO_WORKLOG:2026-07-15:GENERATED:START -->
+<!-- GIT_WORKLOG:2026-07-15:GENERATED:START -->
 （自動產生內容）
-<!-- REPO_WORKLOG:2026-07-15:GENERATED:END -->
+<!-- GIT_WORKLOG:2026-07-15:GENERATED:END -->
 
-<!-- REPO_WORKLOG:2026-07-15:MANUAL:START -->
+<!-- GIT_WORKLOG:2026-07-15:MANUAL:START -->
 （人工補充內容）
-<!-- REPO_WORKLOG:2026-07-15:MANUAL:END -->
+<!-- GIT_WORKLOG:2026-07-15:MANUAL:END -->
 ```
 
 ### Anatomy
@@ -85,8 +88,8 @@ and spacing are all significant. Do not paraphrase them.
 | --- | --- |
 | `# Project Worklog — <date>` | Title. The date must equal the filename's date. **Tool-owned.** |
 | `> 時區：… / > Branch：… / > HEAD：…` | Meta blockquote recorded at analysis time. Lines are emitted only when a value is provided. **Tool-owned.** |
-| `<!-- REPO_WORKLOG:<date>:GENERATED:START -->` / `:GENERATED:END` | Bound the auto-generated analysis. Overwritten on every re-analysis. |
-| `<!-- REPO_WORKLOG:<date>:MANUAL:START -->` / `:MANUAL:END` | Bound the human notes. **Never modified by re-analysis.** |
+| `<!-- GIT_WORKLOG:<date>:GENERATED:START -->` / `:GENERATED:END` | Bound the auto-generated analysis. Overwritten on every re-analysis. |
+| `<!-- GIT_WORKLOG:<date>:MANUAL:START -->` / `:MANUAL:END` | Bound the human notes. **Never modified by re-analysis.** |
 
 There is no `ENTRIES` wrapper, no per-date `START`/`END` block markers, and no
 `## <date>` heading inside the markers — a day file *is* the day. Every day file
@@ -188,8 +191,8 @@ placeholders. The template lists what is *available*, not what is *mandatory*.
 ### No marker lines in generated content
 
 Because parsing is line-based, the generated body must **not** contain a line that
-is itself a `REPO_WORKLOG` marker (e.g. a summary quoting the tool's own
-`<!-- REPO_WORKLOG:…:MANUAL:START -->` on its own line). `update_daily_worklog.py`
+is itself a `GIT_WORKLOG` marker (e.g. a summary quoting the tool's own
+`<!-- GIT_WORKLOG:…:MANUAL:START -->` on its own line). `update_daily_worklog.py`
 refuses such input up front with `GENERATED_CONTAINS_MARKER`; rephrase or inline
 the reference rather than leaving it as a bare marker line. (The same guard makes
 `migrate_legacy_worklog.py` refuse a legacy block whose generated text carries a
@@ -212,19 +215,19 @@ INDEX MANUAL region is human-owned.
 
 ## 工作日誌
 
-<!-- REPO_WORKLOG:INDEX:GENERATED:START -->
+<!-- GIT_WORKLOG:INDEX:GENERATED:START -->
 | 日期 | 摘要 |
 |---|---|
-| [2026-07-15](./2026-07-15.md) | 新增會員搜尋快取並補充 API 測試 |
-| [2026-07-14](./2026-07-14.md) | 重構訂單狀態流程並修正退款判斷 |
-| [2026-07-13](./2026-07-13.md) | 更新 CI 設定與相依套件 |
-<!-- REPO_WORKLOG:INDEX:GENERATED:END -->
+| [2026-07-15](./days/2026-07-15.md) | 新增會員搜尋快取並補充 API 測試 |
+| [2026-07-14](./days/2026-07-14.md) | 重構訂單狀態流程並修正退款判斷 |
+| [2026-07-13](./days/2026-07-13.md) | 更新 CI 設定與相依套件 |
+<!-- GIT_WORKLOG:INDEX:GENERATED:END -->
 
 ## 人工說明
 
-<!-- REPO_WORKLOG:INDEX:MANUAL:START -->
+<!-- GIT_WORKLOG:INDEX:MANUAL:START -->
 可在此補充專案工作日誌的閱讀方式、重要里程碑或交接說明。
-<!-- REPO_WORKLOG:INDEX:MANUAL:END -->
+<!-- GIT_WORKLOG:INDEX:MANUAL:END -->
 ```
 
 ### Index rules
@@ -351,7 +354,7 @@ fixes both — so they are surfaced but do not block.
 A project that already has `docs/PROJECT_WORKLOG.md` is migrated with
 `scripts/migrate_legacy_worklog.py` (or `/git-worklog migrate`), never
 automatically. It reads the legacy file, splits each date into
-`PROJECT_WORKLOG/<date>.md` preserving that date's GENERATED and MANUAL text,
+`.git-worklog/days/<date>.md` preserving that date's GENERATED and MANUAL text,
 and builds `index.md`. It is dry-run by default, **never deletes** the legacy
 file, **never overwrites** a day file that already exists (those are reported as
 `skip-exists`), and **refuses** (`LEGACY_CORRUPT`) if the legacy markers are

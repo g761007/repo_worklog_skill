@@ -8,7 +8,7 @@ import unittest
 
 from helpers import (
     make_empty_repo, make_multi_author_repo, make_tagged_repo,
-    make_worklog_commit_repo, run_script, rmtree,
+    make_worklog_commit_repo, run_script, rmtree, day_file, legacy_day_file, wm,
 )
 
 TPE = ["--timezone", "Asia/Taipei"]
@@ -142,9 +142,9 @@ class TestCheckWorklogCoverage(unittest.TestCase):
     def setUpClass(cls):
         # 2026-08-01 has three commits, 2026-08-02 one, 2026-08-05 none.
         cls.repo = make_multi_author_repo()
-        os.makedirs(os.path.join(cls.repo, "PROJECT_WORKLOG"), exist_ok=True)
-        with open(os.path.join(cls.repo, "PROJECT_WORKLOG", "2026-08-01.md"),
-                  "w", encoding="utf-8") as fh:
+        wdir = os.path.join(cls.repo, wm.WORKLOG_DIRNAME)
+        os.makedirs(os.path.join(wdir, wm.DAYS_SUBDIR), exist_ok=True)
+        with open(day_file(wdir, "2026-08-01"), "w", encoding="utf-8") as fh:
             fh.write("# Project Worklog — 2026-08-01\n")
 
     @classmethod

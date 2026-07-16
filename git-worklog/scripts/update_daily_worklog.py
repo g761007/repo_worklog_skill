@@ -83,9 +83,9 @@ def _plan(worklog_dir: str, entries: dict, meta: dict) -> list[dict]:
         gen_md = entries[date].get("generated_markdown", "")
         if wm.contains_marker_line(gen_md):
             _fail("GENERATED_CONTAINS_MARKER",
-                  f"generated_markdown for {date} contains a REPO_WORKLOG marker line, "
+                  f"generated_markdown for {date} contains a {wm.PREFIX} marker line, "
                   "which would corrupt the file. Rephrase or escape it.", date=date)
-        path = os.path.join(worklog_dir, f"{date}.md")
+        path = wm.day_path(worklog_dir, date, wm.LAYOUT_CURRENT)
         original = _read_existing(path)
         summary = wm.summarise_generated(gen_md)
 
@@ -117,18 +117,20 @@ def _plan(worklog_dir: str, entries: dict, meta: dict) -> list[dict]:
     return writes
 
 
-def _transactional_apply(worklog_dir: str, writes: list[dict]) -> None:
+def _transactional_apply(worklog_dir: str, writes: list[dict], timezone: str | None = None) -> None:
     """Stage, validate, then atomically swap every changed file, with rollback."""
     changed = [w for w in writes if w["action"] != "no_change"]
     if not changed:
         return
-    os.makedirs(worklog_dir, exist_ok=True)
+    day_dir = wm.days_dir(worklog_dir, wm.LAYOUT_CURRENT)
+    os.makedirs(day_dir, exist_ok=True)
+    wm.ensure_data_dir(worklog_dir, timezone)
 
     # Stage each file to a same-directory temp and validate it before it goes live.
     staged: list[tuple[str, dict]] = []
     try:
         for w in changed:
-            fd, tmp = tempfile.mkstemp(dir=worklog_dir, prefix=".rw-", suffix=".tmp")
+            fd, tmp = tempfile.mkstemp(dir=day_dir, prefix=".rw-", suffix=".tmp")
             staged.append((tmp, w))   # track immediately so cleanup can't miss it
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(w["content"])
@@ -197,6 +199,16 @@ def run(args: argparse.Namespace) -> int:
     meta = payload.get("meta", {}) if isinstance(payload.get("meta"), dict) else {}
     worklog_dir = args.dir or payload.get("worklog_dir") or DEFAULT_DIR
 
+    # Writing day files into a pre-v0.6 flat directory would leave the worklog
+    # half in each layout, so refuse and point at the migration instead. Reads
+    # of a legacy directory still work; only writes are gated.
+    if wm.detect_layout(worklog_dir) == wm.LAYOUT_LEGACY:
+        _fail("LEGACY_LAYOUT",
+              f"{worklog_dir} still uses the pre-v0.6 flat layout (day files at its "
+              f"root, not under {wm.DAYS_SUBDIR}/). Run migrate_legacy_worklog.py "
+              "first; this script will not write a mixed-layout directory.",
+              worklog_dir=worklog_dir)
+
     writes = _plan(worklog_dir, entries, meta)
 
     planned = [{"date": w["date"], "path": w["path"], "action": w["action"],
@@ -230,7 +242,7 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     try:
-        _transactional_apply(worklog_dir, writes)
+        _transactional_apply(worklog_dir, writes, meta.get("timezone"))
     except Exception as exc:  # noqa: BLE001 — surface any staging/swap failure as JSON
         _fail("WRITE_FAILED", f"Transactional write failed and was rolled back: {exc}",
               worklog_dir=worklog_dir)

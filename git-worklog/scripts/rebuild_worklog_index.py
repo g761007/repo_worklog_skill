@@ -63,17 +63,15 @@ def _load_input(path: str | None, apply_mode: bool = False) -> dict:
     return json.loads(raw)
 
 
-def _scan_day_summaries(worklog_dir: str) -> tuple[dict[str, str], list[dict]]:
+def _scan_day_summaries(worklog_dir: str, layout: str) -> tuple[dict[str, str], list[dict]]:
     """Map each on-disk ``<date>.md`` to its summary; warn on unreadable files."""
     summaries: dict[str, str] = {}
     warnings: list[dict] = []
     if not os.path.isdir(worklog_dir):
         return summaries, warnings
-    for name in os.listdir(worklog_dir):
-        date = wm.parse_date_filename(name)
-        if date is None:
-            continue
-        path = os.path.join(worklog_dir, name)
+    for date in wm.list_day_dates(worklog_dir, layout):
+        path = wm.day_path(worklog_dir, date, layout)
+        name = os.path.basename(path)
         try:
             with open(path, "rb") as fh:
                 text = fh.read().decode("utf-8")
@@ -127,11 +125,14 @@ def _atomic_write(target: str, content: str) -> None:
 
 def run(args: argparse.Namespace) -> int:
     worklog_dir = args.dir or DEFAULT_DIR
-    index_path = os.path.join(worklog_dir, wm.INDEX_FILENAME)
+    index_path = wm.index_path(worklog_dir)
+    # The index links to wherever the day files actually are, so a legacy
+    # worklog rebuilt before migration still gets working links.
+    layout = wm.detect_layout(worklog_dir)
     payload = _load_input(args.input, apply_mode=bool(args.apply))
     overrides = payload.get("overrides", {}) if isinstance(payload.get("overrides"), dict) else {}
 
-    summaries, warnings = _scan_day_summaries(worklog_dir)
+    summaries, warnings = _scan_day_summaries(worklog_dir, layout)
     # Overrides carry already-extracted one-line summaries (from
     # update_daily_worklog.py's `summaries`), used to preview pending writes.
     for date, summary in overrides.items():
@@ -141,7 +142,7 @@ def run(args: argparse.Namespace) -> int:
 
     rows = [(d, summaries[d]) for d in sorted(summaries, reverse=True)]
     existing_manual = _read_index_manual(index_path)
-    content = wm.render_index(rows, existing_manual)
+    content = wm.render_index(rows, existing_manual, layout)
 
     original = None
     if os.path.exists(index_path):

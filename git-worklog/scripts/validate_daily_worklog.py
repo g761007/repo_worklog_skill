@@ -58,9 +58,9 @@ def _validate_file(path: str) -> dict:
 def _day_files(worklog_dir: str) -> list[str]:
     if not os.path.isdir(worklog_dir):
         return []
-    names = [n for n in os.listdir(worklog_dir) if wm.parse_date_filename(n)]
-    return [os.path.join(worklog_dir, n)
-            for n in sorted(names, reverse=True)]
+    layout = wm.detect_layout(worklog_dir)
+    return [wm.day_path(worklog_dir, d, layout)
+            for d in sorted(wm.list_day_dates(worklog_dir, layout), reverse=True)]
 
 
 def run(args: argparse.Namespace) -> tuple[dict, bool]:

@@ -3,16 +3,19 @@
 
 The worklog is no longer a single growing file. It is a directory:
 
-    PROJECT_WORKLOG/
+    .git-worklog/
+    ├── VERSION
+    ├── config.json
     ├── index.md
-    ├── 2026-07-15.md
-    ├── 2026-07-14.md
-    └── ...
+    └── days/
+        ├── 2026-07-15.md
+        ├── 2026-07-14.md
+        └── ...
 
 Two on-disk shapes are managed here, each with stable HTML-comment markers that
-use the prefix ``REPO_WORKLOG``.
+use the prefix ``GIT_WORKLOG``.
 
-**A per-day file** (``PROJECT_WORKLOG/<date>.md``) holds exactly one day. Its
+**A per-day file** (``.git-worklog/days/<date>.md``) holds exactly one day. Its
 title and meta blockquote are tool-owned (regenerated on every write); only the
 MANUAL region is human-owned and preserved byte-for-byte::
 
@@ -22,27 +25,34 @@ MANUAL region is human-owned and preserved byte-for-byte::
     > Branch：main
     > HEAD：abc1234
 
-    <!-- REPO_WORKLOG:2026-07-15:GENERATED:START -->
+    <!-- GIT_WORKLOG:2026-07-15:GENERATED:START -->
     ...auto-generated...
-    <!-- REPO_WORKLOG:2026-07-15:GENERATED:END -->
+    <!-- GIT_WORKLOG:2026-07-15:GENERATED:END -->
 
-    <!-- REPO_WORKLOG:2026-07-15:MANUAL:START -->
+    <!-- GIT_WORKLOG:2026-07-15:MANUAL:START -->
     ...human notes...
-    <!-- REPO_WORKLOG:2026-07-15:MANUAL:END -->
+    <!-- GIT_WORKLOG:2026-07-15:MANUAL:END -->
 
-**The index** (``PROJECT_WORKLOG/index.md``) is navigation only. Its GENERATED
+**The index** (``.git-worklog/index.md``) is navigation only. Its GENERATED
 region is a date-descending table rebuilt from the day files; its MANUAL region
 is preserved verbatim::
 
-    <!-- REPO_WORKLOG:INDEX:GENERATED:START -->
+    <!-- GIT_WORKLOG:INDEX:GENERATED:START -->
     | 日期 | 摘要 |
     |---|---|
-    | [2026-07-15](./2026-07-15.md) | ... |
-    <!-- REPO_WORKLOG:INDEX:GENERATED:END -->
+    | [2026-07-15](./days/2026-07-15.md) | ... |
+    <!-- GIT_WORKLOG:INDEX:GENERATED:END -->
 
-    <!-- REPO_WORKLOG:INDEX:MANUAL:START -->
+    <!-- GIT_WORKLOG:INDEX:MANUAL:START -->
     ...human notes...
-    <!-- REPO_WORKLOG:INDEX:MANUAL:END -->
+    <!-- GIT_WORKLOG:INDEX:MANUAL:END -->
+
+**Legacy compatibility.** Before v0.6 the directory was ``PROJECT_WORKLOG/``,
+day files sat at its root rather than under ``days/``, and markers used the
+``REPO_WORKLOG`` prefix. Both marker prefixes parse; only ``GIT_WORKLOG`` is
+ever written. ``detect_layout()`` recognises the flat legacy shape so a
+not-yet-migrated worklog stays readable — writing to one is refused, and
+migrate_legacy_worklog.py converts it.
 
 update_daily_worklog.py, rebuild_worklog_index.py, validate_daily_worklog.py,
 validate_worklog_index.py and preview_state.py all build on this module so they
@@ -51,23 +61,37 @@ agree on exactly one definition of the format.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from dataclasses import dataclass
 
-PREFIX = "REPO_WORKLOG"
-WORKLOG_DIRNAME = "PROJECT_WORKLOG"
+PREFIX = "GIT_WORKLOG"
+# Markers written before v0.6. Parsed, never written. Migration rewrites them.
+LEGACY_PREFIX = "REPO_WORKLOG"
+
+WORKLOG_DIRNAME = ".git-worklog"
+LEGACY_WORKLOG_DIRNAME = "PROJECT_WORKLOG"
+DAYS_SUBDIR = "days"
 INDEX_FILENAME = "index.md"
+CONFIG_FILENAME = "config.json"
+VERSION_FILENAME = "VERSION"
+
+# On-disk layout version, written to .git-worklog/VERSION. Bump only when the
+# directory shape changes in a way that needs another migration.
+LAYOUT_VERSION = 1
 
 # --- regexes -----------------------------------------------------------------
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 DATE_FILE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.md$")
 
+_ANY_PREFIX = f"(?:{PREFIX}|{LEGACY_PREFIX})"
 _DAY_MARKER_RE = re.compile(
-    rf"^<!--\s*{PREFIX}:(\d{{4}}-\d{{2}}-\d{{2}}):(GENERATED|MANUAL):(START|END)\s*-->$"
+    rf"^<!--\s*{_ANY_PREFIX}:(\d{{4}}-\d{{2}}-\d{{2}}):(GENERATED|MANUAL):(START|END)\s*-->$"
 )
 _INDEX_MARKER_RE = re.compile(
-    rf"^<!--\s*{PREFIX}:INDEX:(GENERATED|MANUAL):(START|END)\s*-->$"
+    rf"^<!--\s*{_ANY_PREFIX}:INDEX:(GENERATED|MANUAL):(START|END)\s*-->$"
 )
 # Accept an em dash or a plain hyphen between the title and the date.
 _DAY_TITLE_RE = re.compile(r"^#\s+Project Worklog\s+[—–-]\s+(\d{4}-\d{2}-\d{2})\s*$")
@@ -113,11 +137,12 @@ def is_valid_date(value: str) -> bool:
 
 
 def contains_marker_line(text: str) -> bool:
-    """True if any line is a REPO_WORKLOG day/index marker.
+    """True if any line is a day/index marker, in either prefix.
 
     Generated content that carries such a line would corrupt the file's
     structure (parsing is line-based), so callers reject it up front rather
-    than emit a file that fails to re-parse.
+    than emit a file that fails to re-parse. The legacy prefix counts too: it
+    still parses, so it can still corrupt.
     """
     for line in text.splitlines():
         s = line.strip()
@@ -130,6 +155,156 @@ def parse_date_filename(name: str) -> str | None:
     """Return the ISO date encoded by ``<date>.md`` or None (index/other names)."""
     m = DATE_FILE_RE.match(name)
     return m.group(1) if m else None
+
+
+_LEGACY_DAY_MARKER_RE = re.compile(
+    rf"^(\s*)<!--\s*{LEGACY_PREFIX}:(\d{{4}}-\d{{2}}-\d{{2}}):(GENERATED|MANUAL):(START|END)\s*-->\s*$"
+)
+_LEGACY_INDEX_MARKER_RE = re.compile(
+    rf"^(\s*)<!--\s*{LEGACY_PREFIX}:INDEX:(GENERATED|MANUAL):(START|END)\s*-->\s*$"
+)
+
+
+def retag_markers(text: str) -> tuple[str, int]:
+    """Rewrite legacy-prefix marker lines to the current prefix.
+
+    Only whole lines that parse as markers are touched, so prose that merely
+    mentions the old prefix is left alone. Everything else -- the title, the
+    meta blockquote, GENERATED prose, MANUAL notes -- is preserved byte for
+    byte: migration moves a worklog, it does not rewrite one.
+
+    Returns ``(new_text, markers_rewritten)``.
+    """
+    out: list[str] = []
+    count = 0
+    for line in text.splitlines(keepends=True):
+        body = line.rstrip("\n\r")
+        eol = line[len(body):]
+        dm = _LEGACY_DAY_MARKER_RE.match(body)
+        if dm:
+            indent, date, region, edge = dm.groups()
+            out.append(f"{indent}<!-- {PREFIX}:{date}:{region}:{edge} -->{eol}")
+            count += 1
+            continue
+        im = _LEGACY_INDEX_MARKER_RE.match(body)
+        if im:
+            indent, region, edge = im.groups()
+            out.append(f"{indent}<!-- {PREFIX}:INDEX:{region}:{edge} -->{eol}")
+            count += 1
+            continue
+        out.append(line)
+    return "".join(out), count
+
+
+# --- paths & layout ----------------------------------------------------------
+
+# Where a worklog directory's day files live.
+LAYOUT_CURRENT = "current"   # <dir>/days/<date>.md
+LAYOUT_LEGACY = "legacy"     # <dir>/<date>.md   (pre-v0.6, read-only)
+LAYOUT_EMPTY = "empty"       # no day files yet; treated as current
+
+
+def detect_layout(worklog_dir: str) -> str:
+    """Classify a worklog directory by where its day files actually sit.
+
+    Probes the directory rather than trusting its name, so a legacy worklog
+    stays readable wherever it lives and a caller that passes an explicit
+    ``--dir`` is not second-guessed. ``days/`` wins if both shapes are present:
+    a migration that was interrupted leaves the legacy files behind, and the
+    migrated copies are the ones to trust.
+    """
+    if os.path.isdir(os.path.join(worklog_dir, DAYS_SUBDIR)):
+        return LAYOUT_CURRENT
+    try:
+        names = os.listdir(worklog_dir)
+    except OSError:
+        return LAYOUT_EMPTY
+    if any(parse_date_filename(n) for n in names):
+        return LAYOUT_LEGACY
+    return LAYOUT_EMPTY
+
+
+def days_dir(worklog_dir: str, layout: str | None = None) -> str:
+    """Directory holding the day files, for the given (or detected) layout."""
+    if layout is None:
+        layout = detect_layout(worklog_dir)
+    if layout == LAYOUT_LEGACY:
+        return worklog_dir
+    return os.path.join(worklog_dir, DAYS_SUBDIR)
+
+
+def day_path(worklog_dir: str, date: str, layout: str | None = None) -> str:
+    return os.path.join(days_dir(worklog_dir, layout), f"{date}.md")
+
+
+def index_path(worklog_dir: str) -> str:
+    """The index sits at the worklog root in both layouts."""
+    return os.path.join(worklog_dir, INDEX_FILENAME)
+
+
+def config_path(worklog_dir: str) -> str:
+    return os.path.join(worklog_dir, CONFIG_FILENAME)
+
+
+def version_path(worklog_dir: str) -> str:
+    return os.path.join(worklog_dir, VERSION_FILENAME)
+
+
+def day_link(date: str, layout: str | None = None) -> str:
+    """The index's relative link to a day file."""
+    if layout == LAYOUT_LEGACY:
+        return f"./{date}.md"
+    return f"./{DAYS_SUBDIR}/{date}.md"
+
+
+def render_config(timezone: str | None = None) -> str:
+    """The initial ``config.json`` body (roadmap §4.4).
+
+    ``language`` / ``index_language`` are written in their final shape but are
+    inert until the language contract lands; nothing reads them yet.
+    """
+    config = {
+        "schema_version": LAYOUT_VERSION,
+        "timezone": timezone or "auto",
+        "language": "auto",
+        "index_language": "auto",
+        "authors": [],
+        "ignore": [],
+    }
+    return json.dumps(config, ensure_ascii=False, indent=2) + "\n"
+
+
+def ensure_data_dir(worklog_dir: str, timezone: str | None = None) -> list[str]:
+    """Create VERSION and config.json if absent. Returns the paths created.
+
+    Never rewrites either file: both are user-editable, and a worklog that
+    already declares its layout is not ours to redeclare.
+    """
+    created: list[str] = []
+    os.makedirs(worklog_dir, exist_ok=True)
+    vp = version_path(worklog_dir)
+    if not os.path.exists(vp):
+        with open(vp, "w", encoding="utf-8") as fh:
+            fh.write(f"{LAYOUT_VERSION}\n")
+        created.append(vp)
+    cp = config_path(worklog_dir)
+    if not os.path.exists(cp):
+        with open(cp, "w", encoding="utf-8") as fh:
+            fh.write(render_config(timezone))
+        created.append(cp)
+    return created
+
+
+def list_day_dates(worklog_dir: str, layout: str | None = None) -> list[str]:
+    """Every date with a day file, ascending. Empty when the directory is absent."""
+    if layout is None:
+        layout = detect_layout(worklog_dir)
+    d = days_dir(worklog_dir, layout)
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return []
+    return sorted(x for x in (parse_date_filename(n) for n in names) if x)
 
 
 def scan_day(text: str, date: str) -> tuple[DayFile | None, list[dict]]:
@@ -343,13 +518,14 @@ def clean_summary(text: str) -> str:
     return collapsed
 
 
-def render_index(rows: list[tuple[str, str]], manual_inner: str | None = None) -> str:
+def render_index(rows: list[tuple[str, str]], manual_inner: str | None = None,
+                 layout: str | None = None) -> str:
     """Render index.md from ``rows`` (caller sorts them date-descending)."""
     if manual_inner is None:
         manual_inner = DEFAULT_INDEX_MANUAL
     table = ["| 日期 | 摘要 |", "|---|---|"]
     for date, summary in rows:
-        table.append(f"| [{date}](./{date}.md) | {summary} |")
+        table.append(f"| [{date}]({day_link(date, layout)}) | {summary} |")
     gen_body = "\n".join(table)
     parts = [
         _INDEX_HEADER,

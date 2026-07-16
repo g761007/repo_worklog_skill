@@ -59,7 +59,9 @@ def _day_bounds(date_str: str, tz: ZoneInfo) -> tuple[datetime, datetime]:
 
 
 def _has_day_file(worklog_dir: str, date_str: str) -> bool:
-    return os.path.isfile(os.path.join(worklog_dir, f"{date_str}.md"))
+    # Resolve against the layout actually on disk, so a not-yet-migrated
+    # worklog reports its real coverage instead of a repo-wide false gap.
+    return os.path.isfile(wm.day_path(worklog_dir, date_str))
 
 
 def check(args: argparse.Namespace) -> dict:
