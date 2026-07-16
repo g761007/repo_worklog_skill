@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-07-16
+
+### Fixed
+
+- `collect_git_history.py` now excludes self-referential worklog commits (e.g.
+  a `chore(docs): 補充 XX 專案工作日誌` commit that only edits day files and
+  `index.md`). A commit whose changed files fall entirely inside the worklog
+  output directory (`PROJECT_WORKLOG/` by default, `--worklog-dir` to
+  override) is dropped from `commits[]` entirely and never counted in
+  `commit_count`; a commit that also touches real files keeps only its
+  non-worklog files. A day whose only commits were worklog output now reports
+  `has_changes:false`, the same as a day with no commits, instead of
+  producing a worklog entry that describes itself.
+
 ## [0.3.0] - 2026-07-16
 
 ### Changed
@@ -121,6 +135,7 @@ satisfied.
 - A stdlib-only `unittest` suite and GitHub Actions CI on Python 3.9 / 3.12 / 3.13,
   with a `skill.zip` release artifact.
 
+[0.3.1]: https://github.com/g761007/repo_worklog_skill/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/g761007/repo_worklog_skill/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/g761007/repo_worklog_skill/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/g761007/repo_worklog_skill/releases/tag/v0.1.0
