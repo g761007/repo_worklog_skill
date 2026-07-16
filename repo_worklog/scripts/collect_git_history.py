@@ -11,6 +11,13 @@ revert flag.
 Actual patch reading is intentionally left to the subagent (``git show``); this
 keeps the JSON bounded while still giving the analyst an exact file/commit index.
 
+Commits whose changed files fall entirely inside the worklog output directory
+(``PROJECT_WORKLOG/`` by default, ``--worklog-dir`` to override) are the
+worklog's own self-referential output and are dropped from ``commits[]``
+entirely -- not counted, not reported. A commit that touches both the worklog
+directory and real files is kept, with only its worklog-directory files
+removed.
+
 Modes:
   --info-only            Emit only repository metadata (root, branch, HEAD, ...).
   --since ISO --until ISO Emit metadata + commits inside [since, until).
@@ -26,12 +33,19 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 
+import worklog_markers as wm
+
 RECORD_SEP = "\x1e"
 UNIT_SEP = "\x1f"
 
 _COMMIT_FORMAT = UNIT_SEP.join([
     "%H", "%h", "%an", "%ae", "%aI", "%cn", "%ce", "%cI", "%P", "%s", "%b",
 ])
+
+# Commits whose changed files fall entirely inside this directory are the
+# worklog's own output (e.g. "chore(docs): 補充 XX 專案工作日誌") and are
+# excluded as self-referential -- see collect_commits().
+DEFAULT_WORKLOG_DIR = wm.WORKLOG_DIRNAME
 
 
 class GitError(RuntimeError):
@@ -192,8 +206,14 @@ def _is_revert(subject: str, body: str) -> bool:
     return subject.startswith("Revert ") or "This reverts commit" in body
 
 
+def _in_worklog_dir(path: str, worklog_dir: str) -> bool:
+    """True if ``path`` lives inside the worklog output directory."""
+    prefix = worklog_dir.rstrip("/") + "/"
+    return path == worklog_dir or path.startswith(prefix)
+
+
 def collect_commits(repo: str, since: datetime, until: datetime,
-                    date_field: str) -> list[dict]:
+                    date_field: str, worklog_dir: str | None = None) -> list[dict]:
     # Coarse git-side window padded by 2 days; precise half-open filtering is
     # done in Python so the chosen date field and DST boundaries are exact.
     git_since = (since - timedelta(days=2)).isoformat()
@@ -220,6 +240,14 @@ def collect_commits(repo: str, since: datetime, until: datetime,
         parent_list = parents.split() if parents.strip() else []
         is_merge = len(parent_list) > 1
         files = [] if is_merge else commit_files(repo, full)
+        if worklog_dir is not None and files:
+            non_worklog_files = [f for f in files
+                                  if not _in_worklog_dir(f["path"], worklog_dir)]
+            if not non_worklog_files:
+                # Self-referential commit (touches only the worklog's own
+                # output) -- excluded entirely: not counted, not reported.
+                continue
+            files = non_worklog_files
         additions = sum(f["additions"] or 0 for f in files)
         deletions = sum(f["deletions"] or 0 for f in files)
         commits.append({
@@ -261,6 +289,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Which date decides day attribution (default: committer).")
     p.add_argument("--info-only", action="store_true",
                    help="Emit repository metadata only; skip commit collection.")
+    p.add_argument("--worklog-dir", default=DEFAULT_WORKLOG_DIR,
+                   help="Worklog output directory; commits touching only this "
+                        "directory are excluded as self-referential "
+                        f"(default: {DEFAULT_WORKLOG_DIR}).")
     return p
 
 
@@ -285,7 +317,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         since = datetime.fromisoformat(args.since)
         until = datetime.fromisoformat(args.until)
-        commits = collect_commits(args.repo, since, until, args.date_field)
+        commits = collect_commits(args.repo, since, until, args.date_field, args.worklog_dir)
         payload.update({
             "window": {"since": args.since, "until": args.until},
             "commit_count": len(commits),
