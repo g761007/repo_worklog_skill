@@ -605,6 +605,17 @@ def _between_summary_markers(generated_md: str) -> "str | None":
     return None
 
 
+def has_summary_marker(generated_md: str) -> bool:
+    """True if the summary is bracketed rather than found by heading fallback.
+
+    The distinction matters: a zh-TW day without the marker reads correctly
+    today and loses its index summary the moment it is regenerated in another
+    language, so callers want to tell "works" apart from "works for now".
+    """
+    return any(_SUMMARY_MARKER_RE.match(line.strip())
+               for line in generated_md.splitlines())
+
+
 def render_summary(summary: str) -> str:
     """The SUMMARY-marked block that a day's GENERATED region must carry."""
     return (f"<!-- {PREFIX}:SUMMARY:START -->\n"

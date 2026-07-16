@@ -120,11 +120,39 @@ class TestDoctor(unittest.TestCase):
         finally:
             rmtree(work)
 
-    def test_language_checks_are_reported_as_skipped_not_omitted(self):
-        # The command must never imply it checked more than it did.
+    def test_language_settings_are_checked(self):
+        # These were skipped until the language contract existed. Now they are
+        # real: "auto" is a valid answer, not a missing one.
         d, _, _ = self._run()
-        self.assertEqual(self._status(d, "language"), "skipped")
-        self.assertEqual(self._status(d, "index_language"), "skipped")
+        self.assertEqual(self._status(d, "language"), "ok")
+        self.assertEqual(self._status(d, "index_language"), "ok")
+
+    def test_an_unusable_config_language_fails_doctor(self):
+        # The point of checking it here: config.json is hand-edited, and a bad
+        # tag otherwise surfaces mid-analysis with the diff already collected.
+        work = tempfile.mkdtemp(prefix="gw_lang_")
+        try:
+            wdir = os.path.join(work, wm.WORKLOG_DIRNAME)
+            os.makedirs(wdir)
+            write(wm.config_path(wdir),
+                  json.dumps({"schema_version": 1, "language": "chinese"}))
+            d, rc, _ = self._run("--dir", wdir)
+            self.assertEqual(self._status(d, "language"), "fail")
+            self.assertEqual(rc, 1)
+        finally:
+            rmtree(work)
+
+    def test_bare_zh_fails_doctor_rather_than_being_guessed(self):
+        work = tempfile.mkdtemp(prefix="gw_lang_")
+        try:
+            wdir = os.path.join(work, wm.WORKLOG_DIRNAME)
+            os.makedirs(wdir)
+            write(wm.config_path(wdir),
+                  json.dumps({"schema_version": 1, "index_language": "zh"}))
+            d, _, _ = self._run("--dir", wdir)
+            self.assertEqual(self._status(d, "index_language"), "fail")
+        finally:
+            rmtree(work)
 
     def test_legacy_layout_warns_but_does_not_fail(self):
         work = tempfile.mkdtemp(prefix="gw_legacy_")
@@ -297,11 +325,34 @@ class TestValidate(unittest.TestCase):
         self.assertIn("LEGACY_LAYOUT", [w["code"] for w in d["warnings"]])
 
     def test_unchecked_areas_are_declared(self):
+        # language_fields is no longer skipped: config and index languages are
+        # checkable from a worklog alone. What replaced it is narrower and still
+        # honest -- a result's language can only be judged against the manifest
+        # of the run that produced it, which validate cannot see.
         self._seed()
         d, _, _ = self._run()
         self.assertEqual(
             {s["check"] for s in d["skipped"]},
-            {"preview_records", "analysis_results", "language_fields"})
+            {"preview_records", "analysis_results", "result_language"})
+
+    def test_a_day_without_a_summary_marker_warns_but_stays_valid(self):
+        # It reads correctly today via the zh-TW heading fallback, and loses its
+        # index summary the moment it is rewritten in another language. That is
+        # a warning, not an error: nothing is wrong with the file yet.
+        self._seed()
+        d, rc, _ = self._run()
+        self.assertTrue(d["ok"])
+        self.assertEqual(rc, 0)
+        self.assertIn("DAY_SUMMARY_UNMARKED", {w["code"] for w in d["warnings"]})
+
+    def test_a_marked_day_does_not_warn(self):
+        wdir = os.path.join(self.work, wm.WORKLOG_DIRNAME)
+        write(wm.day_path(wdir, "2026-07-15"),
+              wm.render_new_day_file(
+                  "2026-07-15",
+                  "## Daily summary\n" + wm.render_summary("Did the thing.")))
+        d, _, _ = self._run()
+        self.assertNotIn("DAY_SUMMARY_UNMARKED", {w["code"] for w in d["warnings"]})
 
 
 class TestStatePaths(unittest.TestCase):
