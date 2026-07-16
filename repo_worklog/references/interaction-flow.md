@@ -9,6 +9,13 @@ This file covers the menu, option numbers, natural-language and direct-parameter
 entry, the dry-run summary, confirmation, apply-time re-verification, and partial
 failure. Date normalisation detail lives in `references/date-parameter-contract.md`.
 
+**Scope: this file is generation mode.** A request for an *answer* from the
+history rather than for worklog files — 「整理上一週工作摘要」, 「整理 v1.0.1
+CHANGELOG」 — is report mode: it is read-only, has no menu, no dry-run and no
+`preview_id`, and is specified in `references/report-mode.md`. Route first
+(`SKILL.md` §1a). The only place the two meet is §10 below, where report mode
+hands a gap back here to be filled.
+
 ---
 
 ## 1. No-argument menu (hard stop)
@@ -330,3 +337,24 @@ The user may explicitly choose to write only the successful days. That is a new
 request, not a resumed one: re-run the dry-run with only those dates, which
 produces a **new `preview_id`**. Show the updated planned changes and the new
 preview id, and require confirmation again before applying.
+
+---
+
+## 10. Backfill requested by report mode
+
+Report mode calls in here when the range it was asked to report on contains dates
+that have commits but no day file, and the user chose to fill them
+(`references/report-mode.md` §4). Nothing about this flow is special-cased:
+
+1. The gap dates are the range. Run §§5–8 over **only those dates** — the same
+   validation, per-day subagents, dry-run summary, `preview_id`, and explicit
+   confirmation as any other generation run. A report request is **not** a
+   confirmation to write.
+2. The 30-day cap applies, because this spawns subagents. More than 30 gap dates
+   cannot be filled in one pass: say so and offer batches. Never quietly start a
+   45-day run because the report's reading cap was 90.
+3. After the apply, control returns to report mode, which re-reads the freshly
+   written day files and produces the report.
+
+If the user declines the backfill, **do not write anything** and do not treat the
+report as blocked — report mode proceeds and marks the shallow dates instead.

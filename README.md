@@ -26,7 +26,9 @@ repo_worklog/                 # the skill (this whole directory is the skill)
 │   └── provider_models.json  # single source of truth for per-host subagent models
 ├── scripts/                  # deterministic Python helpers (stdlib only)
 │   ├── resolve_provider_model.py    # resolve per-host provider/model (overrides, escalation, halt-and-ask)
-│   ├── resolve_date_range.py        # date/timezone parsing, 30-day limit, per-day bounds
+│   ├── resolve_date_range.py        # date/timezone parsing, day-span cap, per-day bounds
+│   ├── resolve_ref_range.py         # report mode: tag/ref -> authoritative commit set
+│   ├── check_worklog_coverage.py    # report mode: per-date covered / gap / no-commits
 │   ├── collect_git_history.py      # repo metadata + per-day commit facts (no summaries)
 │   ├── inspect_worktree.py         # staged/unstaged/untracked + worktree fingerprint
 │   ├── build_analysis_manifest.py  # group changed files, propose reading, flag big days
@@ -38,6 +40,7 @@ repo_worklog/                 # the skill (this whole directory is the skill)
 │   ├── migrate_legacy_worklog.py   # one-time split of the legacy single file
 │   └── worklog_markers.py          # shared day/index parser/serialiser
 └── references/               # detailed specs the skill loads on demand
+    ├── report-mode.md
     ├── interaction-flow.md
     ├── date-parameter-contract.md
     ├── code-analysis-rules.md
@@ -110,6 +113,32 @@ Or drive it directly / in natural language:
 Every valid request produces a **dry-run preview** with a `preview_id`. Confirm
 with “寫入” / “確認更新” / `apply <preview_id>` to write. See
 `repo_worklog/references/interaction-flow.md` for the full flow.
+
+### Reporting from the worklog
+
+Once days are logged, ask questions instead of building files. Reporting is
+**read-only** — the answer comes back in the conversation, nothing is written, so
+there is no dry-run to confirm:
+
+```
+整理上一週工作摘要
+整理 v1.0.1 CHANGELOG
+我要交接，整理最近一個月的重點與待辦
+Daniel 上個月做了什麼
+會員搜尋這功能是怎麼演進的
+目前累積哪些技術債與待追蹤事項
+```
+
+Reports are built from the day files, so they inherit their analysis rather than
+re-deriving it. If a date in the range has commits but no worklog, the skill says
+so and offers to fill it in first — it never quietly downgrades to summarising
+commit messages. (A date with no commits has no file by design, and is not
+treated as missing.)
+
+Version scopes are resolved by commit set, not by date: `v1.0.1` means
+`git log v1.0.0..v1.0.1`, because a day file can cover commits outside a release
+and a cherry-pick can land outside its dates. See
+`repo_worklog/references/report-mode.md`.
 
 Already have a legacy single-file `docs/PROJECT_WORKLOG.md`? Migrate it once with
 `/repo_worklog migrate` (or `python3 scripts/migrate_legacy_worklog.py`). It
@@ -205,7 +234,9 @@ subagent 分析，所有變更都先以 dry-run 預覽，**經你明確確認後
   - `config/provider_models.json`：逐宿主 subagent 模型的**單一設定來源**。
   - `scripts/`：確定性 Python 腳本（僅用標準庫，各自輸出單一 JSON）。
     - `resolve_provider_model.py`：依宿主解析 provider／模型（覆寫、escalation、halt-and-ask）。
-    - `resolve_date_range.py`：日期／時區解析、30 天上限、逐日半開區間。
+    - `resolve_date_range.py`：日期／時區解析、日數上限（`--max-days`，預設 30）、逐日半開區間。
+    - `resolve_ref_range.py`：報告模式——把 tag／ref 解析成權威的 commit 集合與對應日期。
+    - `check_worklog_coverage.py`：報告模式——逐日覆蓋狀態（covered／gap／no-commits）。
     - `collect_git_history.py`：repo 中繼資料與逐日 commit 事實（不摘要、不依作者過濾）。
     - `inspect_worktree.py`：staged／unstaged／untracked 與 worktree 指紋。
     - `build_analysis_manifest.py`：檔案分組、所需上下文建議、大日標記。
@@ -216,8 +247,8 @@ subagent 分析，所有變更都先以 dry-run 預覽，**經你明確確認後
     - `preview_state.py`：多檔 preview 指紋、apply 前一致性、防重複套用。
     - `migrate_legacy_worklog.py`：一次性把舊單檔拆成目錄式。
     - `worklog_markers.py`：共用的日期檔／索引解析／序列化模組。
-  - `references/`：skill 依需求載入的詳細規格（互動流程、日期契約、程式碼分析規則、
-    subagent 契約、工作日誌格式、模型設定）。
+  - `references/`：skill 依需求載入的詳細規格（報告模式、互動流程、日期契約、
+    程式碼分析規則、subagent 契約、工作日誌格式、模型設定）。
 - `docs/plans/`：設計計畫，檔名格式 `yyyy-MM-dd-<主題>.md`。
   - `2026-07-15-repo-worklog-skill-design.md`：原始設計規格（單檔時代）。
   - `2026-07-16-commit-author-and-report-mode.md`：commit 作者與報告模式。
@@ -277,6 +308,28 @@ ln -s "$(pwd)/repo_worklog" ~/.claude/skills/repo_worklog
 
 任何有效請求都會先產生 **dry-run 預覽**與一個 `preview_id`，以「寫入」／「確認更新」／
 `apply <preview_id>` 確認後才會寫入。完整流程見 `repo_worklog/references/interaction-flow.md`。
+
+### 從工作日誌產生報告
+
+日誌累積之後，可以直接提問，而不是再產生檔案。報告模式是**唯讀**的——答案直接回在對話裡，
+不寫任何檔案，因此沒有 dry-run 需要確認：
+
+```
+整理上一週工作摘要
+整理 v1.0.1 CHANGELOG
+我要交接，整理最近一個月的重點與待辦
+Daniel 上個月做了什麼
+會員搜尋這功能是怎麼演進的
+目前累積哪些技術債與待追蹤事項
+```
+
+報告是從每日檔案產生的，直接沿用既有分析，不重新推導。若範圍內某天有 commit 卻沒有日誌，
+skill 會明講並詢問是否先補齊——**絕不默默降級成摘要 commit message**。（沒有 commit 的日期
+本來就不該有檔案，不會被當成缺漏。）
+
+版本範圍以 **commit 集合**界定，不是日期：`v1.0.1` 指的是 `git log v1.0.0..v1.0.1`——
+因為某天的日誌可能涵蓋不屬於該版本的 commit，而 cherry-pick 的 commit 也可能落在日期區間外。
+詳見 `repo_worklog/references/report-mode.md`。
 
 若專案已有舊的單檔 `docs/PROJECT_WORKLOG.md`，可用 `/repo_worklog migrate`
 （或 `python3 scripts/migrate_legacy_worklog.py`）一次性遷移：它會把每個日期拆成

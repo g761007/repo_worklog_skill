@@ -1,13 +1,17 @@
 ---
 name: repo_worklog
 description: >-
-  Analyze this Git repository's actual code changes day by day and maintain a
+  Analyze this Git repository's actual code changes day by day, maintain a
   human-readable project worklog under PROJECT_WORKLOG/ (one file per day plus an
-  index.md). Use when the user runs /repo_worklog, or asks to 整理/產生/補 工作日誌,
-  build a per-day work log or changelog, summarize what actually changed in the
-  repo over a date range, or document daily commits for handoff. Reads real diffs
-  and code — never just commit messages. Always previews (dry-run) before writing,
-  and only writes after explicit confirmation.
+  index.md), and answer questions from it. Use when the user runs /repo_worklog,
+  or asks to 整理/產生/補 工作日誌, build a per-day work log, summarize what actually
+  changed in the repo over a date range, or document daily commits for handoff —
+  and also to report from that history: 整理上一週工作摘要, draft a release
+  CHANGELOG for a tag or version, summarize a period for a status update or
+  handoff, ask what a named person worked on, or collect outstanding tech debt
+  and follow-ups. Reads real diffs and code — never just commit messages.
+  Reporting is read-only; writing always previews (dry-run) first and only
+  happens after explicit confirmation.
 ---
 
 # repo_worklog
@@ -33,9 +37,16 @@ per-day subagents. **Never let commit messages stand in for reading the diff.**
   or generate anything until the user picks a range.
 - **Read code, not just messages.** Every relevant commit's actual patch and the
   surrounding code context must be read. See `references/code-analysis-rules.md`.
-- **Whole project, every author.** Never filter by `git config user.name/email`.
-- **Max 30 calendar days.** Over the limit → refuse, show the requested day
-  count, ask the user to narrow. Never silently truncate.
+  This holds in report mode too: where a day has no worklog, its commit messages
+  are **not** a substitute — surface the gap and ask.
+- **Whole project, every author.** The worklog always *stores* every author;
+  never filter by `git config user.name/email`. Report mode may filter by author
+  **only when the user names the person explicitly** — never infer who "我" is.
+- **Max 30 calendar days for generation and backfill.** The cap bounds per-day
+  subagent cost. Report mode only *reads* existing day files and spawns no
+  subagents, so it reads up to 90 days (`--max-days 90`). Either way, over the
+  limit → refuse, show the requested day count, ask the user to narrow. Never
+  silently truncate.
 - **Dry-run first, always.** Any valid request produces a preview only. Write
   only after the user explicitly confirms.
 - **One file per day; the index is navigation.** Each day is
@@ -81,6 +92,31 @@ Option numbers map to: `1`→today, `2`→ask for a date, `3`→`days=7`,
 `7`→ask for a date/range + `include_uncommitted`.
 
 Full menu, option, and confirmation handling: `references/interaction-flow.md`.
+
+---
+
+## 1a. Route: generate or report
+
+Two modes. Decide before doing anything else.
+
+| The user wants | Mode | Goes to |
+|---|---|---|
+| The worklog itself built or filled in — 「整理今天」「整理最近 7 天」「補 7/1 的日誌」 | **Generate** (writes) | §2 onward |
+| An **answer** drawn from the history — 「整理上一週工作摘要」「整理 v1.0.1 CHANGELOG」「Daniel 上個月做了什麼」「目前有哪些技術債」 | **Report** (read-only) | `references/report-mode.md` |
+
+The tell: generate mode's product is **files**; report mode's product is **prose
+in the conversation**. "整理今天" wants a day file. "整理上一週的工作摘要" wants
+something to paste into a status update. When it is genuinely ambiguous, ask —
+do not write files on a guess.
+
+Report mode reads the existing day files plus Git, writes nothing, and therefore
+has no dry-run or confirmation gate. Its one writing path is backfilling a gap,
+which hands back to §§2–8 for just those dates, dry-run and confirmation
+included.
+
+**The menu is generate-only.** Report mode is reached by natural language or
+explicit parameters, never by an option number — the menu asks "which range to
+build", which is not the question report mode answers.
 
 ---
 
@@ -361,6 +397,7 @@ Full rules: `references/interaction-flow.md`, `references/code-analysis-rules.md
 
 | Need | Read |
 |------|------|
+| Report mode: scope (dates vs refs), coverage, gaps, scenarios | `references/report-mode.md` |
 | Menu, options, dry-run summary, confirmation, apply | `references/interaction-flow.md` |
 | Date modes, timezone, 30-day limit, NL normalisation | `references/date-parameter-contract.md` |
 | Diff reading, context expansion, final-state, merge/revert/rename/binary/lockfile/submodule | `references/code-analysis-rules.md` |
@@ -371,7 +408,9 @@ Full rules: `references/interaction-flow.md`, `references/code-analysis-rules.md
 | Script | Role |
 |--------|------|
 | `resolve_provider_model.py` | Resolve the per-host subagent provider/model (single source `config/provider_models.json`; overrides, escalation, halt-and-ask) |
-| `resolve_date_range.py` | Parse/validate dates, timezone, 30-day limit, per-day bounds |
+| `resolve_date_range.py` | Parse/validate dates, timezone, day-span limit (`--max-days`, default 30), per-day bounds |
+| `resolve_ref_range.py` | Report mode: resolve a tag/ref to its authoritative commit set + derived dates |
+| `check_worklog_coverage.py` | Report mode: per-date coverage — `covered` / `gap` / `no-commits` |
 | `collect_git_history.py` | Repo metadata + per-day commit facts (no summaries, no author filter) |
 | `inspect_worktree.py` | Staged/unstaged/untracked + worktree fingerprint (include_uncommitted only) |
 | `build_analysis_manifest.py` | Group changed files, propose required context, flag large days |

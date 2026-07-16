@@ -30,11 +30,28 @@ python3 scripts/resolve_date_range.py [SHORTCUT] \
 | `--include-uncommitted` | Records intent to include working-tree changes. Applied to **today only**. |
 | `--timezone IANA` | Explicit IANA timezone override, e.g. `Asia/Taipei`. |
 | `--today D` | Overrides "today" (`YYYY-MM-DD`) for deterministic runs. |
+| `--max-days N` | Maximum span in calendar days. Default `30`. |
 
 The script exits `0` on success and `2` on any validation failure.
 
-`MAX_DAYS = 30`. Natural language is normalised by the **model** before the script
-is called; the script never interprets free text.
+Natural language is normalised by the **model** before the script is called; the
+script never interprets free text.
+
+### The day-span cap
+
+`MAX_DAYS = 30` is the default and applies to `--days` and to `from`/`to`. It
+exists to **bound per-day subagent cost**, so it governs worklog generation and
+backfilling a gap.
+
+Report mode (`references/report-mode.md`) only reads day files already on disk
+and spawns no subagents, so it passes `--max-days 90`. That is a different
+constraint — bounding how much day-file text is pulled into context — not a
+loosening of the generation rule. Backfill is still capped at 30, because
+backfill spawns subagents.
+
+The successful response echoes the cap in effect as `max_days`. `--max-days` must
+be at least 1 (`BAD_MAX_DAYS`); it raises the ceiling, it never removes it —
+`TOO_MANY_DAYS` and `DAYS_OUT_OF_RANGE` still fire against whatever cap applies.
 
 ---
 
@@ -297,10 +314,25 @@ The following table reproduces the plan's §26 cases.
 | 26.5 | 整理 2026 年 7 月 1 日到 7 月 10 日 | `from=2026-07-01`, `to=2026-07-10`, `include_uncommitted=false` |
 | 26.6 | 整理今天，連還沒有 commit 的一起 | `date=<local today>`, `include_uncommitted=true` |
 | 26.7 | 整理最近七天，並包含目前 working tree | `days=7`, `include_uncommitted=true` |
+| — | 整理上一週的工作摘要 | `from`/`to` of the **previous calendar week** |
+| — | 整理這個月 | `from=<1st of this month>`, `to=<local today>` |
 
 Notes:
 
 - "近一個月" always maps to `days=30`, not the calendar-month length.
+- **"上一週" and "最近一週" are different requests.** "最近一週" is a rolling
+  window — the last 7 days including today (`days=7`). "上一週" is the *previous
+  calendar week*: it ends before this week starts and never includes today, so it
+  resolves to explicit `from`/`to` (e.g. asked on Thursday 2026-07-16 with weeks
+  starting Monday → `from=2026-07-06`, `to=2026-07-12`). This distinction matters
+  most for the weekly-summary report, where silently including today's half-done
+  work makes the summary wrong.
+- Week boundaries follow the user's convention. When it is unclear whether their
+  week starts Monday or Sunday and the answer changes the range, ask rather than
+  assume — the script has no notion of weeks, so this is entirely a model-layer
+  decision.
+- Calendar-period phrasings ("上一週", "這個月", "上個月") all resolve to explicit
+  `from`/`to`. Only rolling windows use `days=N`.
 - For multi-day requests with `include_uncommitted=true` (e.g. 26.7), the
   uncommitted working-tree content is attributed to **today only** — never spread
   across the earlier days in the range.
@@ -320,6 +352,7 @@ Notes:
 | `timezone_source` | string | `explicit` \| `env:TZ` \| `system:/etc/localtime` \| `system-offset`. |
 | `include_uncommitted` | boolean | Echoes the flag. |
 | `today` | string | `YYYY-MM-DD` (local today, or the `--today` override). |
+| `max_days` | integer | The day-span cap in effect (default `30`, or `--max-days`). |
 | `errors` | array | Empty (`[]`) on success. |
 | `mode` | string | `date` \| `days` \| `range`. |
 | `days_count` | integer | Number of days in `dates`. |
