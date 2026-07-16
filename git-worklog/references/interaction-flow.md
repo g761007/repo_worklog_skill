@@ -1,6 +1,6 @@
 # Interaction flow
 
-How the skill turns a `/repo_worklog` invocation (menu pick, natural language, or
+How the skill turns a `/git-worklog` invocation (menu pick, natural language, or
 direct parameters) into a validated request, a dry-run preview, and finally an
 apply. The deterministic work is done by `scripts/`; every script is run as
 `python3 scripts/<name>.py` and prints one JSON object with `ok:true`/`ok:false`.
@@ -20,7 +20,7 @@ hands a gap back here to be filled.
 
 ## 1. No-argument menu (hard stop)
 
-When `/repo_worklog` is invoked with **no usable arguments**, print this menu
+When `/git-worklog` is invoked with **no usable arguments**, print this menu
 **verbatim** and wait. Do nothing else.
 
 ```
@@ -126,12 +126,12 @@ A user who already knows the interface can pass parameters on the invocation and
 **skip the menu entirely**:
 
 ```
-/repo_worklog date=2026-07-01
-/repo_worklog days=7
-/repo_worklog 7d
-/repo_worklog 30d
-/repo_worklog from=2026-07-01 to=2026-07-10
-/repo_worklog date=2026-07-15 include_uncommitted=true
+/git-worklog date=2026-07-01
+/git-worklog days=7
+/git-worklog 7d
+/git-worklog 30d
+/git-worklog from=2026-07-01 to=2026-07-10
+/git-worklog date=2026-07-15 include_uncommitted=true
 ```
 
 When valid parameters are present on the invocation, do not print the menu — go

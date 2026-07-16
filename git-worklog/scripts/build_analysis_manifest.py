@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a per-day analysis manifest for a repo_worklog Day Subagent.
+"""Build a per-day analysis manifest for a Git Worklog Day Subagent.
 
 Consumes the JSON produced by ``collect_git_history.py`` for a single day (and,
 optionally, ``inspect_worktree.py`` output for today) and groups the changed
@@ -266,7 +266,7 @@ def build_manifest(args: argparse.Namespace) -> dict:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Build a per-day analysis manifest for repo_worklog.")
+    p = argparse.ArgumentParser(description="Build a per-day analysis manifest for Git Worklog.")
     p.add_argument("--date", required=True, help="The day this manifest describes (YYYY-MM-DD).")
     p.add_argument("--timezone", required=True, help="Resolved IANA timezone.")
     p.add_argument("--history", help="Path to collect_git_history JSON, or '-' / omit for stdin.")

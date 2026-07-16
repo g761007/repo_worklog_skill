@@ -1,7 +1,7 @@
 # Date Parameter Contract
 
 This document describes the exact behaviour of `scripts/resolve_date_range.py`, the
-deterministic date contract for the `repo_worklog` skill. The skill's model layer
+deterministic date contract for the `git-worklog` skill. The skill's model layer
 normalises free-form natural language into canonical parameters *before* calling
 this script; the script itself never parses free text. It only accepts the
 canonical parameters plus a small set of shortcuts, resolves them into concrete
@@ -187,7 +187,7 @@ The `TOO_MANY_DAYS` failure for the 45-day example:
 User-facing message the skill surfaces (from the plan):
 
 ```text
-指定範圍共 45 天，超過 repo_worklog 的 30 天上限。
+指定範圍共 45 天，超過 Git Worklog 的 30 天上限。
 請將日期範圍縮小至 30 天以內。
 ```
 

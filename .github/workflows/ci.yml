@@ -28,11 +28,11 @@ jobs:
           git --version
 
       - name: Byte-compile all scripts
-        run: python -m py_compile repo_worklog/scripts/*.py
+        run: python -m py_compile git-worklog/scripts/*.py
 
       - name: Smoke-test each script CLI (--help)
         run: |
-          for s in repo_worklog/scripts/*.py; do
+          for s in git-worklog/scripts/*.py; do
             case "$s" in
               *worklog_markers.py) continue ;;  # shared module, no CLI
             esac

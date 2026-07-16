@@ -1,9 +1,9 @@
 ---
-name: repo_worklog
+name: git-worklog
 description: >-
   Analyze this Git repository's actual code changes day by day, maintain a
   human-readable project worklog under PROJECT_WORKLOG/ (one file per day plus an
-  index.md), and answer questions from it. Use when the user runs /repo_worklog,
+  index.md), and answer questions from it. Use when the user runs /git-worklog,
   or asks to 整理/產生/補 工作日誌, build a per-day work log, summarize what actually
   changed in the repo over a date range, or document daily commits for handoff —
   and also to report from that history: 整理上一週工作摘要, draft a release
@@ -14,7 +14,7 @@ description: >-
   happens after explicit confirmation.
 ---
 
-# repo_worklog
+# Git Worklog
 
 Produce a **project** worklog (not a personal report) by reading the real Git
 diffs and surrounding code for each day in a requested range, then write one
@@ -59,7 +59,7 @@ per-day subagents. **Never let commit messages stand in for reading the diff.**
 
 ## 1. Trigger & no-argument menu
 
-Triggered by `/repo_worklog` or natural-language worklog requests.
+Triggered by `/git-worklog` or natural-language worklog requests.
 
 When invoked with **no usable arguments**, print this menu verbatim and wait —
 do nothing else:

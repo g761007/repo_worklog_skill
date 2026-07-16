@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage repo_worklog dry-run preview state and apply-time consistency.
+"""Manage Git Worklog dry-run preview state and apply-time consistency.
 
 A preview records a fingerprint of everything that must not have changed between
 the dry-run and the apply: repository identity, branch, HEAD, working-tree
@@ -182,7 +182,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Manage repo_worklog preview state.")
+    p = argparse.ArgumentParser(description="Manage Git Worklog preview state.")
     sub = p.add_subparsers(dest="command", required=True)
 
     c = sub.add_parser("create", help="Create and persist a preview.")

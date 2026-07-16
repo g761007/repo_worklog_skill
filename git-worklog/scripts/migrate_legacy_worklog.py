@@ -7,7 +7,7 @@ script reads that legacy file, splits each date into its own
 ``PROJECT_WORKLOG/<date>.md`` (preserving that date's GENERATED and MANUAL text),
 and builds ``PROJECT_WORKLOG/index.md``.
 
-It is **never** invoked by normal runs — only explicitly, via ``/repo_worklog
+It is **never** invoked by normal runs — only explicitly, via ``/git-worklog
 migrate`` or by running this script. Dry-run is the default. It never deletes the
 legacy file and never overwrites a day file that already exists (those are left
 for the user to reconcile). If the legacy markers are corrupt, it refuses to

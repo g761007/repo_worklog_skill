@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Resolve and validate repo_worklog date parameters into a canonical range.
+"""Resolve and validate Git Worklog date parameters into a canonical range.
 
-This script is the deterministic date contract for the ``repo_worklog`` skill.
+This script is the deterministic date contract for the ``git-worklog`` skill.
 Natural language is normalised into standard parameters by the model *before*
 this script runs; the script itself never interprets free text. It only accepts
 the canonical parameters (``date`` / ``days`` / ``from`` / ``to``) plus the
@@ -238,7 +238,7 @@ def resolve(args: argparse.Namespace) -> dict:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Resolve repo_worklog date parameters.")
+    p = argparse.ArgumentParser(description="Resolve Git Worklog date parameters.")
     p.add_argument("shortcut", nargs="?", help="Shortcut token: NNd or YYYY-MM-DD.")
     p.add_argument("--date", help="Single calendar date (YYYY-MM-DD).")
     p.add_argument("--days", type=int, help="Most recent N calendar days including today (1-30).")

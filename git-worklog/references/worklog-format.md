@@ -1,7 +1,7 @@
 # Worklog Format Reference
 
 This document defines the on-disk format of the project worklog produced by the
-`repo_worklog` skill. The worklog is a **directory**, not one growing file:
+`git-worklog` skill. The worklog is a **directory**, not one growing file:
 
 ```text
 PROJECT_WORKLOG/
@@ -349,7 +349,7 @@ fixes both — so they are surfaced but do not block.
 ## 9. Migration from the legacy single file
 
 A project that already has `docs/PROJECT_WORKLOG.md` is migrated with
-`scripts/migrate_legacy_worklog.py` (or `/repo_worklog migrate`), never
+`scripts/migrate_legacy_worklog.py` (or `/git-worklog migrate`), never
 automatically. It reads the legacy file, splits each date into
 `PROJECT_WORKLOG/<date>.md` preserving that date's GENERATED and MANUAL text,
 and builds `index.md`. It is dry-run by default, **never deletes** the legacy

@@ -16,7 +16,7 @@ import unittest
 
 from helpers import run_script, ROOT
 
-SKILL_DIR = os.path.join(ROOT, "repo_worklog")
+SKILL_DIR = os.path.join(ROOT, "git-worklog")
 CONFIG_PATH = os.path.join(SKILL_DIR, "config", "provider_models.json")
 
 NEW_DEFAULTS = {
@@ -283,7 +283,7 @@ class TestConfigIsSingleSource(unittest.TestCase):
 class TestNoRetiredDefaults(unittest.TestCase):
     """Old default model names must not reappear as active defaults.
 
-    Scoped to the shipped skill (repo_worklog/). The historical design docs under
+    Scoped to the shipped skill (git-worklog/). The historical design docs under
     docs/plans/ are intentionally excluded — they record pre-change plans.
     The old names claude-sonnet-5 / gpt-5.6-terra are permitted ONLY as escalation
     config; gemini-3-flash-preview (the retired google default) must be gone.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Simulate or apply repo_worklog updates to per-day files under PROJECT_WORKLOG/.
+"""Simulate or apply Git Worklog updates to per-day files under PROJECT_WORKLOG/.
 
 Given ``{date: generated_markdown}`` entries, this script computes each target
 day file's new content — creating a fresh file or overwriting only the
@@ -248,7 +248,7 @@ def run(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Create/overwrite per-day repo_worklog files.")
+    p = argparse.ArgumentParser(description="Create/overwrite per-day Git Worklog files.")
     p.add_argument("--input", help="Path to entries JSON, or '-' / omit for stdin.")
     p.add_argument("--dir", help=f"Worklog directory (default: {DEFAULT_DIR}).")
     p.add_argument("--apply", action="store_true",

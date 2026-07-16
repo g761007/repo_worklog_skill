@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report which dates have worklog coverage, for repo_worklog report mode.
+"""Report which dates have worklog coverage, for Git Worklog report mode.
 
 Report mode answers questions from the day files already on disk. Before it can
 do that honestly it has to know which of the requested dates actually have an
@@ -129,7 +129,7 @@ def check(args: argparse.Namespace) -> dict:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Report per-date worklog coverage for repo_worklog report mode.")
+        description="Report per-date worklog coverage for Git Worklog report mode.")
     p.add_argument("--repo", default=".", help="Repository path (default: current directory).")
     p.add_argument("--dir", default=wm.WORKLOG_DIRNAME,
                    help=f"Worklog directory, absolute or relative to the repo root "

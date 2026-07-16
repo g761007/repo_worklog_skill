@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the structural integrity of per-day repo_worklog files.
+"""Validate the structural integrity of per-day Git Worklog files.
 
 For one file (``--target PROJECT_WORKLOG/2026-07-15.md``) or every date file in a
 directory (``--dir PROJECT_WORKLOG``), this checks: the filename is a valid
@@ -76,7 +76,7 @@ def run(args: argparse.Namespace) -> tuple[dict, bool]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Validate per-day repo_worklog files.")
+    p = argparse.ArgumentParser(description="Validate per-day Git Worklog files.")
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--target", help="Path to a single <date>.md day file.")
     g.add_argument("--dir", help="Worklog directory to validate every day file in.")

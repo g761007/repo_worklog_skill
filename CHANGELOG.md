@@ -8,6 +8,25 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Renamed to Git Worklog.** The repository is now `git-worklog`, the skill
+  directory is `git-worklog/`, and the skill is invoked with `/git-worklog`.
+  Reinstall to `~/.claude/skills/git-worklog` (or re-point your symlink) — an
+  install left at the old path keeps answering to the old command.
+
+  The skill directory and the frontmatter `name` had to move together: in Claude
+  Code the **directory name is the command name**, and frontmatter `name` is only
+  the display name. Renaming just the frontmatter — which is what the v1.0
+  roadmap's PR 1 originally scoped — would have left `/repo_worklog` as the real
+  command while every doc told users to type `/git-worklog`. So this change also
+  updates the two hard-coded `repo_worklog/scripts` paths in CI and the two in
+  `tests/`.
+
+  Not renamed yet, to keep this change to names only: the `PROJECT_WORKLOG/`
+  output directory, the `~/.repo_worklog/` state directory, and the
+  `REPO_WORKLOG_*_MODEL` environment variables. Those carry data and behaviour
+  and move with their own migrations. See `docs/naming-conventions.md` for what
+  is active versus planned.
+
 - **Subagents no longer report counts; they report coverage.** `tests[]` now
   names each test file and the behaviour it pins — never how many tests exist
   (no `count` field, no "N 個測試"). More broadly: **never state a quantity you
@@ -249,8 +268,8 @@ satisfied.
 - A stdlib-only `unittest` suite and GitHub Actions CI on Python 3.9 / 3.12 / 3.13,
   with a `skill.zip` release artifact.
 
-[0.4.0]: https://github.com/g761007/repo_worklog_skill/compare/v0.3.1...v0.4.0
-[0.3.1]: https://github.com/g761007/repo_worklog_skill/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/g761007/repo_worklog_skill/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/g761007/repo_worklog_skill/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/g761007/repo_worklog_skill/releases/tag/v0.1.0
+[0.4.0]: https://github.com/g761007/git-worklog/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/g761007/git-worklog/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/g761007/git-worklog/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/g761007/git-worklog/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/g761007/git-worklog/releases/tag/v0.1.0

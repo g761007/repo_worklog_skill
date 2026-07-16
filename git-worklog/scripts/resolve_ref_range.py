@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Resolve a tag/ref range into its authoritative commit set for report mode.
 
-Used by the ``repo_worklog`` skill's report mode when the user asks about a
+Used by the ``git-worklog`` skill's report mode when the user asks about a
 *version* ("整理 v1.0.1 CHANGELOG") rather than a *date range*.
 
 Why this exists, and why the commit set is authoritative
@@ -185,7 +185,7 @@ def resolve(args: argparse.Namespace) -> dict:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Resolve a tag/ref range into its commit set for repo_worklog "
+        description="Resolve a tag/ref range into its commit set for Git Worklog "
                     "report mode.")
     p.add_argument("--repo", default=".", help="Repository path (default: current directory).")
     p.add_argument("--tag", help="Tag to report on; the previous tag is found automatically.")

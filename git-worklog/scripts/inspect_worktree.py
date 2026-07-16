@@ -159,7 +159,7 @@ def _fingerprint(repo: str) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Inspect the Git working tree for repo_worklog.")
+    p = argparse.ArgumentParser(description="Inspect the Git working tree for Git Worklog.")
     p.add_argument("--repo", default=".", help="Repository path (default: current directory).")
     return p
 

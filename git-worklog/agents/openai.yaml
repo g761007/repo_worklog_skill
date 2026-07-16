@@ -1,21 +1,21 @@
-# Agent / host manifest for the repo_worklog skill.
+# Agent / host manifest for the Git Worklog skill.
 #
 # Subagent provider/model selection is NOT defined here. It lives in a single
 # machine-readable source — config/provider_models.json — resolved per host by
 # scripts/resolve_provider_model.py. This keeps one source of truth so the YAML,
 # references, and scripts can never drift to different model names.
 
-name: repo_worklog
-display_name: Repository Worklog
+name: git-worklog
+display_name: Git Worklog
 description: >-
-  Analyze Git commits and source code by day, then preview and maintain a
-  project worklog — and report from it: period summaries, release CHANGELOGs,
-  handoff notes, and outstanding follow-ups.
+  Generate evidence-based engineering worklogs, reports, changelogs, handoff
+  summaries, contribution reports, and technical-debt reviews from actual Git
+  history and source-code changes.
 version: 0.4.0
 
 # The skill body is the control layer; this manifest only carries metadata.
 entrypoint: SKILL.md
-command: /repo_worklog
+command: /git-worklog
 
 ui:
   category: developer-tools
@@ -42,7 +42,7 @@ ui:
 # model_unavailable_policy and references/provider-models.md.
 model_config: config/provider_models.json
 
-# Presentation shown when the user invokes /repo_worklog with no arguments.
+# Presentation shown when the user invokes /git-worklog with no arguments.
 default_prompt: |
   請選擇要整理的專案工作日誌範圍：
 

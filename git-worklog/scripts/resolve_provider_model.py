@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Resolve the subagent provider/model for the host the skill runs under.
 
-The repo_worklog orchestrator runs under exactly one host — Claude Code
+The Git Worklog orchestrator runs under exactly one host — Claude Code
 (`anthropic`), Codex (`openai`), or Gemini (`google`) — and every Day Subagent
 and Code Analysis Subagent for a run executes on that host's single model. This
 script is the deterministic, single-source resolver: it reads
@@ -169,7 +169,7 @@ def resolve(args: argparse.Namespace) -> tuple[dict, int]:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Resolve the per-host subagent provider/model for repo_worklog.")
+        description="Resolve the per-host subagent provider/model for Git Worklog.")
     p.add_argument("--host", help="Detected host / provider key: anthropic | openai | google.")
     p.add_argument("--model", default="",
                    help="Explicit runtime model id override (highest precedence).")

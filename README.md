@@ -1,4 +1,4 @@
-# repo_worklog skill
+# Git Worklog
 
 A portable agent **skill** that turns a Git repository's real code history into a
 human-readable, per-day **project worklog** under `PROJECT_WORKLOG/` — one
@@ -18,7 +18,7 @@ only writes after you explicitly confirm. It logs the whole project's history
 ### Layout
 
 ```
-repo_worklog/                 # the skill (this whole directory is the skill)
+git-worklog/                  # the skill (this whole directory is the skill)
 ├── SKILL.md                  # control layer: triggers, flow, script/reference map
 ├── agents/
 │   └── openai.yaml           # host manifest: display name, UI metadata, model_config pointer
@@ -49,9 +49,12 @@ repo_worklog/                 # the skill (this whole directory is the skill)
     ├── worklog-format.md
     └── provider-models.md
 
-docs/plans/                   # design plans, newest last (yyyy-MM-dd-<topic>.md)
-├── 2026-07-15-repo-worklog-skill-design.md   # the original spec (single-file era)
-└── 2026-07-16-commit-author-and-report-mode.md
+docs/
+├── naming-conventions.md     # canonical names: brand, skill, CLI, package, directories
+└── plans/                    # design plans, newest last (yyyy-MM-dd-<topic>.md)
+    ├── 2026-07-15-repo-worklog-skill-design.md   # the original spec (single-file era)
+    ├── 2026-07-16-commit-author-and-report-mode.md
+    └── 2026-07-16-git-worklog-v1-roadmap.md      # the v1.0 rebrand + refactor roadmap
 ```
 
 The worklog itself is written to `PROJECT_WORKLOG/` at the repository root:
@@ -74,23 +77,23 @@ PROJECT_WORKLOG/
 
 ### Installation
 
-This directory *is* the skill. Install it by placing the `repo_worklog/` folder
+This directory *is* the skill. Install it by placing the `git-worklog/` folder
 where your host discovers skills, for example for Claude Code:
 
 ```bash
 # user-level
-cp -r repo_worklog ~/.claude/skills/repo_worklog
+cp -r git-worklog ~/.claude/skills/git-worklog
 # or project-level, inside a target repo
-cp -r repo_worklog <your-project>/.claude/skills/repo_worklog
+cp -r git-worklog <your-project>/.claude/skills/git-worklog
 ```
 
 Prefer a symlink while developing, so edits take effect immediately:
 
 ```bash
-ln -s "$(pwd)/repo_worklog" ~/.claude/skills/repo_worklog
+ln -s "$(pwd)/git-worklog" ~/.claude/skills/git-worklog
 ```
 
-Then invoke it with `/repo_worklog` (or natural language like “整理最近 7 天”).
+Then invoke it with `/git-worklog` (or natural language like “整理最近 7 天”).
 
 ### Usage
 
@@ -98,22 +101,22 @@ Run with no arguments to get the range menu; the skill does nothing until you
 pick a range:
 
 ```
-/repo_worklog
+/git-worklog
 ```
 
 Or drive it directly / in natural language:
 
 ```
-/repo_worklog days=7
-/repo_worklog date=2026-07-01
-/repo_worklog from=2026-07-01 to=2026-07-10
-/repo_worklog date=2026-07-15 include_uncommitted=true
+/git-worklog days=7
+/git-worklog date=2026-07-01
+/git-worklog from=2026-07-01 to=2026-07-10
+/git-worklog date=2026-07-15 include_uncommitted=true
 整理最近 7 天，包含目前還沒有 commit 的修改
 ```
 
 Every valid request produces a **dry-run preview** with a `preview_id`. Confirm
 with “寫入” / “確認更新” / `apply <preview_id>` to write. See
-`repo_worklog/references/interaction-flow.md` for the full flow.
+`git-worklog/references/interaction-flow.md` for the full flow.
 
 ### Reporting from the worklog
 
@@ -139,10 +142,10 @@ treated as missing.)
 Version scopes are resolved by commit set, not by date: `v1.0.1` means
 `git log v1.0.0..v1.0.1`, because a day file can cover commits outside a release
 and a cherry-pick can land outside its dates. See
-`repo_worklog/references/report-mode.md`.
+`git-worklog/references/report-mode.md`.
 
 Already have a legacy single-file `docs/PROJECT_WORKLOG.md`? Migrate it once with
-`/repo_worklog migrate` (or `python3 scripts/migrate_legacy_worklog.py`). It
+`/git-worklog migrate` (or `python3 scripts/migrate_legacy_worklog.py`). It
 splits each date into `PROJECT_WORKLOG/<date>.md`, previews first, never deletes
 the old file, and refuses if the legacy markers are corrupt.
 
@@ -152,7 +155,7 @@ the old file, and refuses if the legacy markers are corrupt.
   (`update_daily_worklog.py --dir` / `rebuild_worklog_index.py --dir` to override).
 - **Timezone:** auto-detected (`$TZ` → `/etc/localtime` → offset); override with
   `resolve_date_range.py --timezone Asia/Taipei`.
-- **Subagent models:** defined once in `repo_worklog/config/provider_models.json`
+- **Subagent models:** defined once in `git-worklog/config/provider_models.json`
   (cost-first defaults — Claude Haiku 4.5 / GPT-5.6 Luna / Gemini 3.5 Flash) and
   resolved per host by `resolve_provider_model.py`. Override with
   `REPO_WORKLOG_{ANTHROPIC,OPENAI,GOOGLE}_MODEL` or an explicit `--model`. See
@@ -168,7 +171,7 @@ the old file, and refuses if the legacy markers are corrupt.
 Each script is standalone and prints one JSON object to stdout:
 
 ```bash
-cd repo_worklog
+cd git-worklog
 python3 scripts/resolve_date_range.py --days 7 --timezone Asia/Taipei --today 2026-07-15
 python3 scripts/collect_git_history.py --repo /path/to/repo --info-only
 python3 scripts/update_daily_worklog.py --dir /tmp/PROJECT_WORKLOG <<'JSON'
@@ -223,7 +226,7 @@ Released under the [MIT License](LICENSE).
 
 ## 繁體中文說明
 
-`repo_worklog` 是一個可攜的 agent **skill**，把 Git repository 的**實際程式碼歷史**
+**Git Worklog** 是一個可攜的 agent **skill**，把 Git repository 的**實際程式碼歷史**
 整理成方便人閱讀、**逐日**的**專案工作日誌**，寫在 `PROJECT_WORKLOG/` 目錄下——
 每天一個 Markdown 檔，另有一份 `index.md` 依日期由新到舊連結各日。
 
@@ -233,7 +236,7 @@ subagent 分析，所有變更都先以 dry-run 預覽，**經你明確確認後
 
 ### 目錄結構
 
-- `repo_worklog/`：整個目錄就是 skill 本體。
+- `git-worklog/`：整個目錄就是 skill 本體。
   - `SKILL.md`：控制層——觸發條件、流程、腳本與 references 對照。
   - `agents/openai.yaml`：宿主 manifest——顯示名稱、UI metadata、model_config 指標。
   - `config/provider_models.json`：逐宿主 subagent 模型的**單一設定來源**。
@@ -255,9 +258,11 @@ subagent 分析，所有變更都先以 dry-run 預覽，**經你明確確認後
     - `worklog_markers.py`：共用的日期檔／索引解析／序列化模組。
   - `references/`：skill 依需求載入的詳細規格（報告模式、互動流程、日期契約、
     程式碼分析規則、subagent 契約、工作日誌格式、模型設定）。
+- `docs/naming-conventions.md`：品牌、skill、CLI、package 與目錄的正式命名對照。
 - `docs/plans/`：設計計畫，檔名格式 `yyyy-MM-dd-<主題>.md`。
   - `2026-07-15-repo-worklog-skill-design.md`：原始設計規格（單檔時代）。
   - `2026-07-16-commit-author-and-report-mode.md`：commit 作者與報告模式。
+  - `2026-07-16-git-worklog-v1-roadmap.md`：v1.0 更名與重構路線圖。
 
 工作日誌本身寫在 repository 根目錄的 `PROJECT_WORKLOG/`：
 
@@ -277,43 +282,43 @@ PROJECT_WORKLOG/
 
 ### 安裝
 
-這個目錄本身就是 skill，把 `repo_worklog/` 放到宿主會探索 skill 的位置即可。以 Claude Code 為例：
+這個目錄本身就是 skill，把 `git-worklog/` 放到宿主會探索 skill 的位置即可。以 Claude Code 為例：
 
 ```bash
 # 使用者層級
-cp -r repo_worklog ~/.claude/skills/repo_worklog
+cp -r git-worklog ~/.claude/skills/git-worklog
 # 或專案層級（放進目標 repo）
-cp -r repo_worklog <your-project>/.claude/skills/repo_worklog
+cp -r git-worklog <your-project>/.claude/skills/git-worklog
 ```
 
 開發時建議改用**符號連結**，修改能即時生效：
 
 ```bash
-ln -s "$(pwd)/repo_worklog" ~/.claude/skills/repo_worklog
+ln -s "$(pwd)/git-worklog" ~/.claude/skills/git-worklog
 ```
 
-之後以 `/repo_worklog` 或自然語言（例如「整理最近 7 天」）呼叫。
+之後以 `/git-worklog` 或自然語言（例如「整理最近 7 天」）呼叫。
 
 ### 使用方式
 
 無參數呼叫時只會顯示範圍選單，**在你選擇範圍前不做任何分析**：
 
 ```
-/repo_worklog
+/git-worklog
 ```
 
 也可直接帶參數或用自然語言：
 
 ```
-/repo_worklog days=7
-/repo_worklog date=2026-07-01
-/repo_worklog from=2026-07-01 to=2026-07-10
-/repo_worklog date=2026-07-15 include_uncommitted=true
+/git-worklog days=7
+/git-worklog date=2026-07-01
+/git-worklog from=2026-07-01 to=2026-07-10
+/git-worklog date=2026-07-15 include_uncommitted=true
 整理最近 7 天，包含目前還沒有 commit 的修改
 ```
 
 任何有效請求都會先產生 **dry-run 預覽**與一個 `preview_id`，以「寫入」／「確認更新」／
-`apply <preview_id>` 確認後才會寫入。完整流程見 `repo_worklog/references/interaction-flow.md`。
+`apply <preview_id>` 確認後才會寫入。完整流程見 `git-worklog/references/interaction-flow.md`。
 
 ### 從工作日誌產生報告
 
@@ -335,9 +340,9 @@ skill 會明講並詢問是否先補齊——**絕不默默降級成摘要 commi
 
 版本範圍以 **commit 集合**界定，不是日期：`v1.0.1` 指的是 `git log v1.0.0..v1.0.1`——
 因為某天的日誌可能涵蓋不屬於該版本的 commit，而 cherry-pick 的 commit 也可能落在日期區間外。
-詳見 `repo_worklog/references/report-mode.md`。
+詳見 `git-worklog/references/report-mode.md`。
 
-若專案已有舊的單檔 `docs/PROJECT_WORKLOG.md`，可用 `/repo_worklog migrate`
+若專案已有舊的單檔 `docs/PROJECT_WORKLOG.md`，可用 `/git-worklog migrate`
 （或 `python3 scripts/migrate_legacy_worklog.py`）一次性遷移：它會把每個日期拆成
 `PROJECT_WORKLOG/<date>.md`，先預覽、絕不刪除舊檔，舊標記損壞時則拒絕遷移。
 
@@ -347,7 +352,7 @@ skill 會明講並詢問是否先補齊——**絕不默默降級成摘要 commi
   `update_daily_worklog.py --dir` ／ `rebuild_worklog_index.py --dir` 覆寫）。
 - **時區**：自動偵測（`$TZ` → `/etc/localtime` → 系統偏移）；可用
   `resolve_date_range.py --timezone Asia/Taipei` 指定。
-- **Subagent 模型**：於 `repo_worklog/config/provider_models.json` 統一設定
+- **Subagent 模型**：於 `git-worklog/config/provider_models.json` 統一設定
   （成本優先預設——Claude Haiku 4.5 ／ GPT-5.6 Luna ／ Gemini 3.5 Flash），由
   `resolve_provider_model.py` 依宿主解析；可用
   `REPO_WORKLOG_{ANTHROPIC,OPENAI,GOOGLE}_MODEL` 或 `--model` 覆寫，詳見

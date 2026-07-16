@@ -1,6 +1,6 @@
 # Provider Models
 
-Per-host subagent model selection for the `repo_worklog` skill. The **single
+Per-host subagent model selection for the `git-worklog` skill. The **single
 source of truth** is `config/provider_models.json`; this document is its
 human-facing mirror. Never add a second place that stores model ids — update the
 JSON and this file only.
@@ -95,7 +95,7 @@ supplies the candidate list on `MODEL_UNAVAILABLE`.
 Example message:
 
 ```text
-Unable to start repo_worklog subagent.
+Unable to start Git Worklog subagent.
 Provider: openai
 Requested model: gpt-5.6-luna
 The requested model is not available in the current host.

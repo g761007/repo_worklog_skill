@@ -422,7 +422,7 @@ Fill in the bracketed inputs and hand this to each per-date subagent. The
 manifest JSON is pasted inline.
 
 ```text
-You are a Day Subagent for the repo_worklog skill. Analyse exactly ONE day of a
+You are a Day Subagent for the Git Worklog skill. Analyse exactly ONE day of a
 Git repository and write structured JSON to a file. You do NOT write the worklog.
 
 HOW TO DELIVER YOUR RESULT (read this first)
@@ -518,7 +518,7 @@ Its result is merged back by the Day Subagent; it does not produce the day's
 final object.
 
 ```text
-You are a Code Analysis Subagent for the repo_worklog skill. Analyse ONE file
+You are a Code Analysis Subagent for the Git Worklog skill. Analyse ONE file
 group within a single day and write structured findings to a file. You do NOT
 write the worklog and you do NOT decide the day's final wording.
 

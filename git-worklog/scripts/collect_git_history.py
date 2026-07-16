@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect Git repository metadata and per-day commit facts for repo_worklog.
+"""Collect Git repository metadata and per-day commit facts for Git Worklog.
 
 This script gathers the *raw material* a Day Subagent needs. It never writes
 summaries and never filters by author identity -- the worklog is a project log,
@@ -281,7 +281,7 @@ def collect_commits(repo: str, since: datetime, until: datetime,
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Collect Git history facts for repo_worklog.")
+    p = argparse.ArgumentParser(description="Collect Git history facts for Git Worklog.")
     p.add_argument("--repo", default=".", help="Repository path (default: current directory).")
     p.add_argument("--since", help="Day window start, ISO 8601 with offset (inclusive).")
     p.add_argument("--until", help="Day window end, ISO 8601 with offset (exclusive).")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared parser / serialiser for the repo_worklog directory-based worklog.
+"""Shared parser / serialiser for the Git Worklog directory-based worklog.
 
 The worklog is no longer a single growing file. It is a directory:
 
