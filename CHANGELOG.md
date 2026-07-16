@@ -34,10 +34,30 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `commits[].author_name` and a deduplicated day-level `authors[]`; the
   orchestrator renders attribution from those directly, so the Day Subagent
   return schema is unchanged. Author emails are deliberately excluded.
-- `tests/test_report_scope.py`, plus multi-author and tagged fixtures (suite
-  grows 97 → 132).
+- `collect_day_results.py` — Day Subagent results are now exchanged through
+  **files** instead of return values. The orchestrator mints a run directory
+  (`init`) and hands each subagent its own
+  `~/.repo_worklog/analysis/<run_id>/<date>.json`; the subagent writes its JSON
+  there and replies only `DONE`; the orchestrator collects and validates the lot
+  (`read`). See `references/subagent-contract.md` §6a.
+- `tests/test_report_scope.py` and `tests/test_day_results.py`, plus multi-author
+  and tagged fixtures (suite grows 97 → 152).
 
 ### Changed
+
+- **Day Subagents deliver results by writing a file, not by returning them.** The
+  return channel was the pipeline's weakest link: it drops content (observed — a
+  subagent that spent 63k tokens on correct analysis returned nothing, losing the
+  day), it truncates (a day's object is routinely 15KB+), and its semantics and
+  limits differ across the hosts this skill targets. A file has none of those
+  properties and persists, so a later failure never costs the analysis twice and
+  a human can read exactly what a subagent concluded.
+- The orchestrator's completeness check is now deterministic:
+  `collect_day_results.py read` validates every result against the §6 schema and
+  reports `missing` (never arrived) and `invalid` (unparseable or off-schema)
+  explicitly. **A missing result is a failed day, never an empty one** — it is
+  never silently skipped and never back-filled from commit messages, and it sets
+  `partial_run`, which blocks apply by default.
 
 - Two golden rules are now scoped per mode rather than weakened:
   - The 30-day cap bounds per-day subagent cost, so it governs generation and

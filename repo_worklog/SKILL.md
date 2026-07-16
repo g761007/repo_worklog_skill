@@ -178,7 +178,19 @@ python3 scripts/collect_git_history.py --repo <root> --info-only
 
 ## 5. Per-day analysis — one Day Subagent per day
 
-Split the range into one task **per calendar day**. For each day:
+Split the range into one task **per calendar day**.
+
+**5·0. Mint the run's result directory once, before dispatching anything:**
+
+```
+python3 scripts/collect_day_results.py init --dates <every date in the range>
+```
+
+Keep `run_dir` and `paths`. Each Day Subagent **writes** its JSON to its own
+`paths[<date>]` and replies only `DONE` — results are never passed back as reply
+text, which drops and truncates them. See `references/subagent-contract.md` §6a.
+
+Then, for each day:
 
 **5a. Collect that day's Git facts** (deterministic):
 
@@ -212,11 +224,26 @@ the day's authorship — `authors[]` (distinct names, first-appearance order) pl
 `commits[].author_name`. You render the `參與者` line and each `相關 commits`
 entry's author from these directly; the subagent never returns attribution.
 
-**5c. Spawn one Day Subagent** for that day, passing the manifest. The subagent
-must read the real diffs and enough code context, determine the **end-of-day
-state** (a feature added then reverted the same day is *not* a live change), and
-return the structured JSON in `references/subagent-contract.md`. It must not
-write to the worklog. Days with no commits still report `has_changes:false`.
+**5c. Spawn one Day Subagent** for that day, passing the manifest **and its
+`paths[<date>]` output path**. The subagent must read the real diffs and enough
+code context, determine the **end-of-day state** (a feature added then reverted
+the same day is *not* a live change), and **write** the structured JSON in
+`references/subagent-contract.md` to that path, replying only `DONE`. It must not
+write to the worklog. Days with no commits still write `has_changes:false`.
+
+**5d. Collect every day's result** (deterministic), once all subagents finish:
+
+```
+python3 scripts/collect_day_results.py read --run-dir <run_dir> \
+    --dates <every dispatched date>
+```
+
+It validates each file against the return schema and gives `results` (date →
+object), `complete`, `degraded`, `missing`, `invalid`, `failed_dates`,
+`partial_run`, and `escalation_suggested_dates`. **A date in `missing` or
+`invalid` is a failed day, not an empty one** — never treat it as "nothing
+happened" and never fall back to its commit messages. `partial_run:true` blocks
+apply by default (§9).
 
 For large days, the Day Subagent may fan out into Code Analysis Subagents grouped
 by feature/module (see `references/subagent-contract.md`).
@@ -261,8 +288,10 @@ describe it as committed. In a multi-day range, only today gets a worktree pass.
 
 ## 7. Merge results, generate Markdown, dry-run
 
-1. Merge the per-day subagent results. If any day's subagent failed, mark the
-   run **partial** and default to blocking apply (see error handling below).
+1. Merge the per-day results from `collect_day_results.py read` (§5d). If it
+   reports any `missing`, `invalid`, or `degraded` date — i.e. `partial_run` —
+   mark the run **partial** and default to blocking apply (see error handling
+   below).
 2. Render each day's GENERATED Markdown from the day template in
    `references/worklog-format.md`. Omit empty sections — no walls of "無/N/A".
    Days with no changes get no file by default. Lead each day's `當日摘要` with
@@ -414,6 +443,7 @@ Full rules: `references/interaction-flow.md`, `references/code-analysis-rules.md
 | `collect_git_history.py` | Repo metadata + per-day commit facts (no summaries, no author filter) |
 | `inspect_worktree.py` | Staged/unstaged/untracked + worktree fingerprint (include_uncommitted only) |
 | `build_analysis_manifest.py` | Group changed files, propose required context, flag large days |
+| `collect_day_results.py` | Mint the run's result dir + per-date paths; read back and validate each Day Subagent's written JSON (missing/invalid → that day failed) |
 | `update_daily_worklog.py` | Simulate/apply per-day files (create/overwrite/no-change); preserve MANUAL; transactional write |
 | `rebuild_worklog_index.py` | Rebuild `index.md` from day files (descending, summaries); preserve index MANUAL; atomic write |
 | `validate_daily_worklog.py` | Per-day file marker/title/UTF-8 validation |

@@ -32,6 +32,7 @@ repo_worklog/                 # the skill (this whole directory is the skill)
 │   ├── collect_git_history.py      # repo metadata + per-day commit facts (no summaries)
 │   ├── inspect_worktree.py         # staged/unstaged/untracked + worktree fingerprint
 │   ├── build_analysis_manifest.py  # group changed files, propose reading, flag big days
+│   ├── collect_day_results.py      # file-based subagent result exchange + schema validation
 │   ├── update_daily_worklog.py     # create/overwrite per-day files (transactional); preserve MANUAL
 │   ├── rebuild_worklog_index.py    # rebuild index.md from day files; preserve index MANUAL
 │   ├── validate_daily_worklog.py   # per-day file marker/title/UTF-8 validation
@@ -157,6 +158,10 @@ the old file, and refuses if the legacy markers are corrupt.
   `REPO_WORKLOG_{ANTHROPIC,OPENAI,GOOGLE}_MODEL` or an explicit `--model`. See
   `references/provider-models.md`.
 - **Preview state:** stored outside the repo in `~/.repo_worklog/previews/`.
+- **Subagent results:** each Day Subagent writes its analysis to
+  `~/.repo_worklog/analysis/<run_id>/<date>.json` rather than returning it as
+  reply text, which drops and truncates. Files are kept after the run, so a
+  surprising worklog entry can be traced to the analysis behind it.
 
 ### Development commands
 
@@ -240,6 +245,7 @@ subagent 分析，所有變更都先以 dry-run 預覽，**經你明確確認後
     - `collect_git_history.py`：repo 中繼資料與逐日 commit 事實（不摘要、不依作者過濾）。
     - `inspect_worktree.py`：staged／unstaged／untracked 與 worktree 指紋。
     - `build_analysis_manifest.py`：檔案分組、所需上下文建議、大日標記。
+    - `collect_day_results.py`：以檔案交換 subagent 分析結果並驗證 schema（缺檔／格式錯 → 該日視為失敗）。
     - `update_daily_worklog.py`：建立／覆蓋每日檔案（交易式）、保留 MANUAL。
     - `rebuild_worklog_index.py`：由日期檔重建 index.md、保留索引 MANUAL。
     - `validate_daily_worklog.py`：每日檔案的標記／標題／UTF-8 驗證。
@@ -347,6 +353,9 @@ skill 會明講並詢問是否先補齊——**絕不默默降級成摘要 commi
   `REPO_WORKLOG_{ANTHROPIC,OPENAI,GOOGLE}_MODEL` 或 `--model` 覆寫，詳見
   `references/provider-models.md`。
 - **Preview 狀態**：存放在 repo 之外的 `~/.repo_worklog/previews/`。
+- **Subagent 分析結果**：每個 Day Subagent 把分析**寫進**
+  `~/.repo_worklog/analysis/<run_id>/<date>.json`，而不是用回傳值交付——回傳通道會掉內容也會截斷。
+  結果檔在執行後保留，方便回溯某段日誌是根據什麼分析寫出來的。
 
 ### 安全模型
 

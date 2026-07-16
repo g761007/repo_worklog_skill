@@ -25,7 +25,10 @@ sees and every decision that spans more than one day:
 - date validation (`resolve_date_range.py`),
 - per-day task splitting (one Day Subagent per date),
 - subagent dispatch and provider/model selection,
-- result-completeness checks (every dispatched date returned a valid object),
+- minting the run's result directory and handing each subagent its output path
+  (`collect_day_results.py init` — see §6a),
+- result-completeness checks (`collect_day_results.py read`: every dispatched
+  date produced a valid object on disk),
 - cross-day deduplication,
 - Markdown generation (one GENERATED block per day; the `當日摘要` first line
   becomes that day's row in `index.md`),
@@ -37,9 +40,10 @@ code analysis. If a day has no analysis, that day has no content — it is not
 back-filled from commit messages.
 
 **Day Subagent.** Handles **exactly one date** and **never writes the worklog**.
-It reads Git and code, then returns one structured JSON object (section 6). A day
-with no commits and no in-scope uncommitted changes still returns a valid object
-with `has_changes:false` — it is never silently dropped.
+It reads Git and code, then **writes** one structured JSON object (section 6) to
+the output path it was given (section 6a). A day with no commits and no in-scope
+uncommitted changes still writes a valid object with `has_changes:false` — it is
+never silently dropped.
 
 ---
 
@@ -184,8 +188,14 @@ including cross-group deduplication within the day.
 
 ## 6. Day Subagent return schema (EXACT)
 
-The Day Subagent returns exactly this object. All keys are present even when the
-array is empty. No prose outside the JSON.
+**A Day Subagent delivers its result by writing a file, never by returning it as
+its reply.** The orchestrator mints a run directory and hands each subagent its
+own output path (§6a); the subagent's final action is to write exactly this
+object there, then reply only `DONE`.
+
+The object below is what goes **in the file**. All keys are present even when the
+array is empty. The file contains the JSON object and nothing else — no prose, no
+markdown fence.
 
 ```json
 {
@@ -247,6 +257,68 @@ Rules:
 
 ---
 
+## 6a. Result exchange — files, not return values
+
+The result of a Day Subagent is the expensive part of the whole run: real patches
+read, real code understood. Handing it back as reply text makes it hostage to the
+host's return channel, which is the pipeline's weakest link:
+
+- **It drops content.** Observed in practice: a subagent that spent 63k tokens on
+  correct analysis returned nothing at all, and the day's work was lost.
+- **It truncates.** A day's object is routinely 15KB+; a large day is far bigger.
+- **It differs per host.** This skill runs under Claude Code, Codex and Gemini,
+  whose return semantics and size limits are not the same.
+- **It is not recoverable.** A lost reply means re-running the entire analysis.
+
+A file has none of those properties, and it persists — so a later failure in
+rendering, preview or apply never costs the analysis a second time, and a human
+can read exactly what a subagent concluded.
+
+### The flow
+
+1. **Mint the run** (orchestrator, once per run, before dispatch):
+
+```
+python3 scripts/collect_day_results.py init --dates 2026-07-15,2026-07-16
+```
+
+Returns `run_id`, `run_dir`, and `paths` — one output path per date. Results live
+outside the repository, under `~/.repo_worklog/analysis/<run_id>/<date>.json`,
+next to the preview state. The worklog directory is for the worklog; it is never
+used for scratch.
+
+2. **Dispatch**, giving each Day Subagent **its own** `paths[<date>]` value. One
+path per subagent means two days can never race on one file.
+
+3. **Collect** (orchestrator, after all subagents finish):
+
+```
+python3 scripts/collect_day_results.py read --run-dir <run_dir> \
+    --dates 2026-07-15,2026-07-16
+```
+
+Returns `results` (date → the validated object), `complete`, `degraded`
+(status `partial`/`failed`), `missing` (no file arrived), `invalid` (unparseable
+or off-schema, with the reason), `failed_dates`, `partial_run`, and
+`escalation_suggested_dates`.
+
+### What this guarantees
+
+`read` structurally validates every result against §6 — required top-level keys,
+the date matching the file it was produced for, `status` and `confidence` in
+their allowed sets, and each `work_items[]` entry's required keys. It is the
+deterministic half of the orchestrator's completeness check (§1).
+
+**A missing or malformed file means that day failed.** It is never an empty day,
+never silently skipped, and never back-filled from commit messages. `read`
+reports it in `missing` / `invalid` and sets `partial_run:true`, which blocks
+apply by default (§11).
+
+Result files are deliberately left in place after a run so a surprising worklog
+entry can be traced back to the analysis that produced it.
+
+---
+
 ## 7. Confidence
 
 Every `work_item` carries a `confidence`. Allowed values (plan §13.1):
@@ -305,7 +377,15 @@ manifest JSON is pasted inline.
 
 ```text
 You are a Day Subagent for the repo_worklog skill. Analyse exactly ONE day of a
-Git repository and return structured JSON. You do NOT write the worklog.
+Git repository and write structured JSON to a file. You do NOT write the worklog.
+
+HOW TO DELIVER YOUR RESULT (read this first)
+Your final action MUST be a file write saving your JSON to exactly this path:
+  [paths[<date>] from collect_day_results.py init]
+The file must contain ONLY the JSON object — valid parseable JSON, no markdown
+fence, no prose. Do NOT put the JSON in your reply: the reply channel drops and
+truncates content, and losing it would throw away your whole analysis. After
+writing the file, reply with just: DONE
 
 INPUTS
 - date:               [YYYY-MM-DD]
@@ -313,8 +393,9 @@ INPUTS
 - repository root:    [absolute path]
 - include_uncommitted:[true|false]   (uncommitted content belongs to TODAY only)
 - provider / model:   [anthropic|openai|google] / [model_id from the manifest's model.model_id]
+- output path:        [paths[<date>] — where your JSON must be written]
 - analysis manifest (from build_analysis_manifest.py):
-[PASTE THE MANIFEST JSON HERE]
+[PASTE THE MANIFEST JSON HERE, or give its file path if large]
 
 WHAT TO DO
 1. For every relevant commit in the manifest, read the ACTUAL patch:
@@ -336,9 +417,10 @@ WHAT TO DO
    uncommitted_changes as today's work.
 
 OUTPUT
-- Return EXACTLY the Day Subagent return schema (section 6 of the subagent
-  contract). All keys present; empty arrays where nothing applies. A day with no
-  work returns has_changes:false.
+- WRITE to the output path above EXACTLY the Day Subagent return schema (section
+  6 of the subagent contract). All keys present; empty arrays where nothing
+  applies. A day with no work still writes a valid object with has_changes:false
+  — never skip the write.
 - Set status (complete|partial|failed), the day-level confidence
   (verified|inferred|unknown), and escalation_recommended + escalation_reasons[]
   honestly per section 7. escalation_recommended is a SUGGESTION only — never
@@ -351,7 +433,7 @@ OUTPUT
   data). Never state an inference as fact.
 - Put anything unverifiable in uncertainties[]; lower confidence rather than
   guess. Do NOT fabricate symbols, files, behaviours, or test results.
-- Respond with the JSON object only — no surrounding prose.
+- Write the file, then reply with just: DONE
 ```
 
 ---
@@ -364,14 +446,22 @@ final object.
 
 ```text
 You are a Code Analysis Subagent for the repo_worklog skill. Analyse ONE file
-group within a single day and return structured findings. You do NOT write the
-worklog and you do NOT decide the day's final wording.
+group within a single day and write structured findings to a file. You do NOT
+write the worklog and you do NOT decide the day's final wording.
+
+HOW TO DELIVER YOUR RESULT (read this first)
+Your final action MUST be a file write saving your JSON to exactly this path:
+  [the output path your parent Day Subagent gave you]
+The file must contain ONLY the JSON object — no markdown fence, no prose. Do NOT
+put the JSON in your reply: the reply channel drops and truncates content. After
+writing the file, reply with just: DONE
 
 INPUTS
 - date:            [YYYY-MM-DD]
 - timezone:        [IANA tz]
 - repository root: [absolute path]
 - provider / model:[same as the parent Day Subagent]
+- output path:     [<run_dir>/<date>.<group-slug>.json — given by the parent]
 - file group (from the manifest's file_groups[]):
     group:    [e.g. backend:src/api]
     category: [feature|backend|frontend|mobile|api|database|tests|configuration|deployment|documentation]
@@ -399,21 +489,30 @@ OUTPUT
   diff/code region, test file, line numbers/ranges.
 - Set confidence honestly (verified / inferred / unknown); never present an
   inference as fact. Record anything unverifiable as an uncertainty.
-- Respond with the JSON only. Do not deduplicate across other groups — the Day
-  Subagent reconciles that.
+- Do not deduplicate across other groups — the Day Subagent reconciles that.
+- Write the file, then reply with just: DONE
 ```
+
+A Day Subagent that fans out gives each Code Analysis Subagent a distinct path
+under the same `run_dir`, named `<date>.<group-slug>.json`, then reads them back
+and reconciles them into its own `<date>.json`. Those group files sit beside the
+day's result without colliding — `collect_day_results.py read` looks only for
+`<date>.json`. A group file that is missing or unparseable makes the **day**
+`partial` (§11); the Day Subagent must not quietly drop that group's work area.
 
 ---
 
 ## 11. Failure handling
 
-If a day's subagent fails (plan §22.5):
+A day fails when `collect_day_results.py read` reports it under `missing` (no
+file was written), under `invalid` (unparseable or off-schema), or when its own
+`status` is `partial`/`failed`. Then (plan §22.5):
 
 - **Do not** substitute commit messages for the missing analysis. A failed day
   has no content, not a message-derived stand-in.
 - **Other days may continue** — one failed date does not abort the run.
-- **Mark the whole run partial.** The orchestrator's completeness check treats
-  any missing or invalid day object as a failure of that day.
+- **Mark the whole run partial.** `read` sets `partial_run:true`; treat any
+  missing or invalid day object as a failure of that day, never as an empty day.
 - **Apply is blocked by default** for a partial run.
 - **Show the failed date(s) and the reason** in the dry-run summary.
 
