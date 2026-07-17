@@ -9,7 +9,8 @@ data — they never touch the worklog.
 The reading discipline a subagent must follow (real diffs, context expansion,
 merge/revert/rename handling, end-of-day state) lives in
 `references/code-analysis-rules.md`. Manifest construction lives in
-`scripts/build_analysis_manifest.py`. This file is the interface between them.
+`git_worklog.analysis.manifest`, driven by `analyze prepare`. This file is the
+interface between them.
 
 ---
 
@@ -25,10 +26,11 @@ sees and every decision that spans more than one day:
 - date validation (`resolve_date_range.py`),
 - per-day task splitting (one Day Subagent per date),
 - subagent dispatch and provider/model selection,
-- minting the run's result directory and handing each subagent its output path
-  (`collect_day_results.py init` — see §6a),
-- result-completeness checks (`collect_day_results.py read`: every dispatched
-  date produced a valid object on disk),
+- minting the run and handing each subagent its manifest and output path
+  (`analyze prepare` — see §6a),
+- result-completeness checks (`analyze collect`: every dispatched date produced a
+  valid object on disk, in the right language, with accurate citations covering
+  the day's required files),
 - cross-day deduplication,
 - Markdown generation (one GENERATED block per day, in the run's resolved
   language; the SUMMARY-marked line becomes that day's row in `index.md`),
@@ -79,9 +81,9 @@ only**, never to a past date.
 
 ## 3. The analysis manifest (input)
 
-Each Day Subagent is handed one manifest, produced by
-`scripts/build_analysis_manifest.py`. The orchestrator has already confirmed the
-builder returned `ok:true` before dispatch. The manifest is a **planning aid**:
+Each Day Subagent is handed one manifest, written by `analyze prepare` to the
+task's `manifest_path`. The orchestrator has already confirmed the run prepared
+cleanly before dispatch. The manifest is a **planning aid**:
 it groups files and proposes what to read; it never contains patches and never
 decides worklog wording.
 
@@ -89,8 +91,14 @@ Fields:
 
 | Field | Type | Meaning |
 |-------|------|---------|
+| `schema_version` | int | Manifest schema version (`1`). |
+| `run_id` | string\|null | The run this task belongs to; null for a manifest built ad hoc. |
 | `date` | `"YYYY-MM-DD"` | The single day this manifest covers. |
 | `timezone` | string | Resolved IANA timezone. |
+| `repository` | object\|null | `{root, git_dir, head, branch}` — which checkout this came from. |
+| `result_path` | string\|null | Where this day's analysis must be written (section 6a). |
+| `analysis_rules[]` | array | The rules this analysis is held to, carried on the task itself. |
+| `required_commit_file_pairs[]` | array | `{commit, file, category, required}` — section 3a. |
 | `include_uncommitted` | bool | Whether working-tree changes are in scope (today only). |
 | `provider` | string | `anthropic` / `openai` / `google`. |
 | `model` | object\|null | `{display_name, model_id}` (+ `reasoning_effort` for openai). Section 4. |
@@ -128,6 +136,35 @@ directory (`.git-worklog/` by default) before the manifest is built — see
 `references/code-analysis-rules.md` §6.8. A day whose only commits were worklog
 output arrives with `commits: []`, `commit_count: 0`, and `has_changes: false`,
 same as a day with no commits at all.
+
+---
+
+## 3a. `required_commit_file_pairs[]` — what the day is held to
+
+Every (commit, file) the day touched is listed, each flagged `required` or not.
+All of them appear, not only the required ones, so you can tell what you are
+*not* being held to from what was overlooked.
+
+**A file with `required:true` must be accounted for in the result.** Naming it in
+a work item's `files[]` is enough; an `evidence[]` citation is stronger but not
+demanded. `analyze collect` fails the day with `COVERAGE_INCOMPLETE` and names
+every required file the result never mentions.
+
+Only source categories (`backend`, `frontend`, `mobile`, `database`) are
+required. Docs, config, CI and tests are listed but excused — real work, but a
+day may fairly cover them in a sentence. Binaries and submodules are excused
+(there is no source to read), and so are deletions: the file is gone from that
+commit's tree, so a citation of it there would be rejected anyway.
+
+This is the completeness half of the evidence rules. §8 makes each citation
+*accurate*; this makes the set of them *complete*. Accuracy alone is not enough —
+an analysis can cite three real files perfectly, never mention the other twenty
+the day changed, and still look verified. **A file you changed but never
+described is a file you may never have read.** If a required file genuinely
+needed no comment, say so in one line rather than omitting it.
+
+Do not satisfy this by listing paths you did not open. A `files[]` entry is a
+claim that the file was part of the work you are describing.
 
 ---
 
@@ -290,43 +327,57 @@ can read exactly what a subagent concluded.
 
 ### The flow
 
-1. **Mint the run** (orchestrator, once per run, before dispatch):
+1. **Prepare the run** (orchestrator, once per run, before dispatch):
 
 ```
-python3 scripts/collect_day_results.py init --dates 2026-07-15,2026-07-16
+python3 -m git_worklog analyze prepare --repo <root> \
+    --from 2026-07-15 --to 2026-07-16 --timezone Asia/Taipei \
+    --language <tag|auto> --language-source <source>
 ```
 
-Returns `run_id`, `run_dir`, and `paths` — one output path per date. Results live
-outside the repository, under `~/.git-worklog/analysis/<run_id>/<date>.json`,
-next to the preview state. The worklog directory is for the worklog; it is never
-used for scratch.
+Returns `run_id`, `run_dir`, and `tasks[]` — one entry per date, each with a
+`manifest_path` and a `result_path`. Both live outside the repository, under
+`~/.git-worklog/analysis/<run_id>/{tasks,results}/<date>.json`, next to the
+preview state. The worklog directory is for the worklog; it is never used for
+scratch.
 
-2. **Dispatch**, giving each Day Subagent **its own** `paths[<date>]` value. One
-path per subagent means two days can never race on one file.
+2. **Dispatch**, giving each Day Subagent **its own** `manifest_path` and
+`result_path`. One path per subagent means two days can never race on one file.
 
 3. **Collect** (orchestrator, after all subagents finish):
 
 ```
-python3 scripts/collect_day_results.py read --run-dir <run_dir> \
-    --dates 2026-07-15,2026-07-16
+python3 -m git_worklog analyze collect --run-id <run_id> --repo <root>
 ```
 
 Returns `results` (date → the validated object), `complete`, `degraded`
-(status `partial`/`failed`), `missing` (no file arrived), `invalid` (unparseable
-or off-schema, with the reason), `failed_dates`, `partial_run`, and
-`escalation_suggested_dates`.
+(status `partial`/`failed`), `missing` (no file arrived), `invalid` (unparseable,
+off-schema, wrong language, inaccurate citations or incomplete coverage — with
+the reason), `unknown` (a result the run never asked for), `failed_dates`,
+`partial_run`, and `escalation_suggested_dates`.
+
+Note what `collect` is *not* given: a date list or a language. It reads the run's
+own manifests for both, so a day cannot be dropped from the check by being left
+off a command line, and a result cannot be judged against a language nobody asked
+for.
 
 ### What this guarantees
 
-`read` structurally validates every result against §6 — required top-level keys,
-the date matching the file it was produced for, `status` and `confidence` in
-their allowed sets, and each `work_items[]` entry's required keys. It is the
+`collect` validates every result against §6 — required top-level keys, the date
+matching the file it was produced for, `status` and `confidence` in their allowed
+sets, each `work_items[]` entry's required keys — then against its manifest: the
+declared language (§6.2.9), every citation's accuracy against the cited commit's
+tree (§8), and coverage of the day's required files (§3a). It is the
 deterministic half of the orchestrator's completeness check (§1).
 
 **A missing or malformed file means that day failed.** It is never an empty day,
-never silently skipped, and never back-filled from commit messages. `read`
+never silently skipped, and never back-filled from commit messages. `collect`
 reports it in `missing` / `invalid` and sets `partial_run:true`, which blocks
 apply by default (§11).
+
+**When a day fails, fix the analysis, not the file.** Re-run that day's subagent
+against the same manifest and let it write `result_path` again. Editing a result
+by hand to get past a check defeats every guarantee above.
 
 Result files are deliberately left in place after a run so a surprising worklog
 entry can be traced back to the analysis that produced it.
@@ -340,7 +391,7 @@ never a choice.** The subagent does not decide, detect, negotiate or improve on
 it. Copy the tag exactly as given — `zh-TW` stays `zh-TW`, not `zh`, not
 `zh-Hant`, not `Traditional Chinese`.
 
-`collect_day_results.py` rejects the day if `language` is missing, is not a BCP
+`analyze collect` rejects the day if `language` is missing, is not a BCP
 47 tag, or is not the tag the manifest asked for. A rejected day blocks the whole
 run from apply, so getting this wrong wastes the entire analysis, not just the
 field.
@@ -449,7 +500,7 @@ knowable and always verifiable against the repository. `symbol` and `lines` are
 expected wherever the change touches code — omit them only when they genuinely do
 not apply, not to save effort.
 
-This is enforced, not merely requested: `collect_day_results.py read` rejects a
+This is enforced, not merely requested: `analyze collect` rejects a
 result whose evidence entries are strings, or are missing `commit` or `file`
 (`EVIDENCE_INVALID`), and that day is reported as failed. The reason is that a
 free-text `evidence` field degrades into a restatement of the commit subject —
@@ -477,7 +528,7 @@ Git repository and write structured JSON to a file. You do NOT write the worklog
 
 HOW TO DELIVER YOUR RESULT (read this first)
 Your final action MUST be a file write saving your JSON to exactly this path:
-  [paths[<date>] from collect_day_results.py init]
+  [result_path from analyze prepare]
 The file must contain ONLY the JSON object — valid parseable JSON, no markdown
 fence, no prose. Do NOT put the JSON in your reply: the reply channel drops and
 truncates content, and losing it would throw away your whole analysis. After
@@ -490,8 +541,8 @@ INPUTS
 - include_uncommitted:[true|false]   (uncommitted content belongs to TODAY only)
 - provider / model:   [anthropic|openai|google] / [model_id from the manifest's model.model_id]
 - output language:    [the manifest's language.resolved, e.g. zh-TW]
-- output path:        [paths[<date>] — where your JSON must be written]
-- analysis manifest (from build_analysis_manifest.py):
+- output path:        [the manifest's result_path — where your JSON must be written]
+- analysis manifest (from analyze prepare):
 [PASTE THE MANIFEST JSON HERE, or give its file path if large]
 
 WHAT TO DO
@@ -522,6 +573,14 @@ WHAT TO DO
    report the net result, not each intermediate step as if it were live.
 7. If include_uncommitted is true, incorporate the manifest's
    uncommitted_changes as today's work.
+8. COVER EVERY REQUIRED FILE. The manifest's required_commit_file_pairs marks
+   each file required:true or required:false. Before you write your result, walk
+   the required:true list and check that each path appears somewhere in it —
+   a work_item's files[] is enough, an evidence[] citation is stronger. This is
+   validated: any required file your result never mentions fails the day and
+   blocks the whole run (COVERAGE_INCOMPLETE). If a required file genuinely
+   needs no comment, say so in one line rather than leaving it out. Do NOT list
+   a path you did not open — files[] is a claim that you read it.
 
 OUTPUT
 - WRITE to the output path above EXACTLY the Day Subagent return schema (section
@@ -646,7 +705,7 @@ OUTPUT
 A Day Subagent that fans out gives each Code Analysis Subagent a distinct path
 under the same `run_dir`, named `<date>.<group-slug>.json`, then reads them back
 and reconciles them into its own `<date>.json`. Those group files sit beside the
-day's result without colliding — `collect_day_results.py read` looks only for
+day's result without colliding — `analyze collect` looks only for
 `<date>.json`. A group file that is missing or unparseable makes the **day**
 `partial` (§11); the Day Subagent must not quietly drop that group's work area.
 
@@ -654,17 +713,24 @@ day's result without colliding — `collect_day_results.py read` looks only for
 
 ## 11. Failure handling
 
-A day fails when `collect_day_results.py read` reports it under `missing` (no
-file was written), under `invalid` (unparseable or off-schema), or when its own
-`status` is `partial`/`failed`. Then (plan §22.5):
+A day fails when `analyze collect` reports it under `missing` (no file was
+written), under `invalid` (unparseable, off-schema, wrong language, a citation
+that does not resolve, or a required file left unmentioned), or when its own
+`status` is `partial`/`failed`. A result the run never asked for lands in
+`unknown` and is not merged. Then (plan §22.5):
 
 - **Do not** substitute commit messages for the missing analysis. A failed day
   has no content, not a message-derived stand-in.
 - **Other days may continue** — one failed date does not abort the run.
-- **Mark the whole run partial.** `read` sets `partial_run:true`; treat any
+- **Mark the whole run partial.** `collect` sets `partial_run:true`; treat any
   missing or invalid day object as a failure of that day, never as an empty day.
 - **Apply is blocked by default** for a partial run.
 - **Show the failed date(s) and the reason** in the dry-run summary.
+- **Fix the analysis, not the result file.** A day that failed on language,
+  evidence or coverage can be re-run against the same manifest — dispatch that
+  date's subagent again, let it overwrite its `result_path`, and collect once
+  more. Hand-editing a result to get past a check discards the only guarantee
+  these checks provide.
 
 The user may explicitly choose to write only the successful days. That is a
 **new** request, not a resumed one: re-run the dry-run over only those dates,

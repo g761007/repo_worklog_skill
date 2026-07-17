@@ -28,7 +28,10 @@ git-worklog/                  # the skill (this whole directory is the skill)
 │   ├── __init__.py           # __version__ — the single source of the product version
 │   ├── markers.py            # day/index parser/serialiser; the format's definition
 │   ├── paths.py              # user-level state dir ($GIT_WORKLOG_HOME, ~/.git-worklog)
-│   └── cli/                  # version / doctor / validate
+│   ├── language.py           # BCP 47 resolution; the run's one output language
+│   ├── config.py             # project config.json reader
+│   ├── analysis/             # the pipeline: history -> manifest -> results (+ worktree)
+│   └── cli/                  # version / doctor / validate / analyze
 ├── scripts/                  # deterministic Python helpers (stdlib only)
 │   ├── resolve_provider_model.py    # resolve per-host provider/model (overrides, escalation, halt-and-ask)
 │   ├── resolve_date_range.py        # date/timezone parsing, day-span cap, per-day bounds
@@ -36,8 +39,8 @@ git-worklog/                  # the skill (this whole directory is the skill)
 │   ├── check_worklog_coverage.py    # report mode: per-date covered / gap / no-commits
 │   ├── collect_git_history.py      # repo metadata + per-day commit facts (no summaries)
 │   ├── inspect_worktree.py         # staged/unstaged/untracked + worktree fingerprint
-│   ├── build_analysis_manifest.py  # group changed files, propose reading, flag big days
-│   ├── collect_day_results.py      # file-based subagent result exchange + schema validation
+│   ├── build_analysis_manifest.py  # one day's manifest (analyze prepare does a range)
+│   ├── collect_day_results.py      # flat-dir result validation (analyze collect also checks coverage)
 │   ├── update_daily_worklog.py     # create/overwrite per-day files (transactional); preserve MANUAL
 │   ├── rebuild_worklog_index.py    # rebuild index.md from day files; preserve index MANUAL
 │   ├── validate_daily_worklog.py   # per-day file marker/title/UTF-8 validation
@@ -140,8 +143,8 @@ git-worklog analyze prepare --from 2026-07-01 --to 2026-07-07 \
 
 git-worklog analyze collect --run-id <run_id>
 # → reads the results back and checks them: every prepared day arrived, none
-#   drifted language, and every evidence citation resolves against the tree of
-#   the commit it names.
+#   drifted language, every evidence citation resolves against the tree of the
+#   commit it names, and no source file the day changed went undescribed.
 ```
 
 Between the two, something has to actually read the patches and write the
@@ -149,6 +152,12 @@ prose — and that something is your agent's model, not the CLI. This is why no
 model API key is needed: `prepare` only decides *what* must be analysed, and
 `collect` only decides whether to believe the answer. A day whose analysis never
 arrived is reported as `missing`, never as a day where nothing happened.
+
+That last check is the one that catches quiet failures. An analysis can cite
+three real files perfectly, never mention the other twenty the day changed, and
+still call itself complete and verified — so `prepare` marks which files the day
+is answerable for (source only; docs, config, tests, binaries and deletions are
+excused) and `collect` fails any day that leaves one undescribed.
 
 More commands — generation, reports, migration — arrive as the CLI grows; today
 those live in the skill.
@@ -314,8 +323,8 @@ subagent 分析，所有變更都先以 dry-run 預覽，**經你明確確認後
     - `check_worklog_coverage.py`：報告模式——逐日覆蓋狀態（covered／gap／no-commits）。
     - `collect_git_history.py`：repo 中繼資料與逐日 commit 事實（不摘要、不依作者過濾）。
     - `inspect_worktree.py`：staged／unstaged／untracked 與 worktree 指紋。
-    - `build_analysis_manifest.py`：檔案分組、所需上下文建議、大日標記。
-    - `collect_day_results.py`：以檔案交換 subagent 分析結果並驗證 schema（缺檔／格式錯 → 該日視為失敗）。
+    - `build_analysis_manifest.py`：單日 manifest（`analyze prepare` 一次處理整個範圍）。
+    - `collect_day_results.py`：扁平目錄的結果驗證。它看不到 manifest，因此無法檢查覆蓋率，也不假裝檢查；請優先用 `analyze collect`。
     - `update_daily_worklog.py`：建立／覆蓋每日檔案（交易式）、保留 MANUAL。
     - `rebuild_worklog_index.py`：由日期檔重建 index.md、保留索引 MANUAL。
     - `validate_daily_worklog.py`：每日檔案的標記／標題／UTF-8 驗證。
@@ -407,13 +416,19 @@ git-worklog analyze prepare --from 2026-07-01 --to 2026-07-07 \
 #   每份都指定該日分析結果必須寫入的 result_path。
 
 git-worklog analyze collect --run-id <run_id>
-# → 把結果讀回來檢查：每個準備過的日期都有交、沒有任何一天語言跑掉，
-#   而且每條 evidence 引文都能在它所引用的那個 commit 的 tree 上對得上。
+# → 把結果讀回來檢查：每個準備過的日期都有交、沒有任何一天語言跑掉、
+#   每條 evidence 引文都能在它所引用的那個 commit 的 tree 上對得上，
+#   而且當天改到的原始碼沒有任何一個檔案沒被描述到。
 ```
 
 在這兩步之間，總得有人真的去讀 patch、寫出敘述——那是你的 agent 的模型，不是 CLI。
 這正是不需要模型 API key 的原因：`prepare` 只決定**該分析什麼**，`collect` 只決定
 要不要相信答案。分析沒交回來的日子會被報成 `missing`，絕不會被當成「這天沒事發生」。
+
+最後那項檢查抓的是最安靜的失敗：一份分析可以把三個檔案引用得完美無缺、卻對當天改動的
+另外二十個檔案隻字未提，而它看起來依然「完整、已驗證」。所以 `prepare` 會標出當天該負責
+的檔案（只限原始碼；文件、設定、測試、二進位檔與刪除的檔案都豁免），`collect` 則會讓
+任何漏掉的日子失敗。
 
 產生日誌、報告、遷移等指令會隨 CLI 成長陸續加入，目前仍在 skill 內。
 

@@ -40,7 +40,7 @@ The orchestrator resolves the model with one deterministic script and threads it
 ```text
 scripts/resolve_provider_model.py --host <anthropic|openai|google>
   -> { provider, model:{display_name, model_id[, reasoning_effort]}, ... }
-  -> build_analysis_manifest.py --provider <key> --model-json '<model>'
+  -> analyze prepare --provider <key> --model-json '<model>'
   -> spawn every Day / Code-Analysis subagent on that model
 ```
 
