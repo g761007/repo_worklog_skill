@@ -211,6 +211,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from private repositories. This variable is new, not a rename — there was never
   a `REPO_WORKLOG_HOME`.
 
+### Fixed
+
+- **A large day's fan-out no longer blocks itself** (#6). Manifests gain
+  `parts_dir`, and `analyze prepare` creates `<run_dir>/parts/` for it.
+
+  A Day Subagent is handed a manifest and a `result_path` and nothing else, so
+  when `large_day` led it to split the day into Code Analysis Subagents, it
+  derived their paths from the only path it had — landing them in `results/`,
+  where `collect` reads every file as some day's answer and fails the run over
+  any it did not ask for. The day the contract most wants split up was exactly
+  the day that then could not be written.
+
+  The contract sent it there: §10 said the parts go "under the same `run_dir` …
+  beside the day's result without colliding", which was true when a run was one
+  flat directory and stopped being true when `tasks/` and `results/` were split
+  out. It could not be fixed by rewording, either — `run_dir` was not on the
+  manifest, so the sentence described a path the subagent had no way to build.
+
+  Found by dogfooding this repo's own 28-commit day.
+
 ### Removed
 
 - **`scripts/preview_state.py`** (#6) — superseded by `git-worklog preview` /
