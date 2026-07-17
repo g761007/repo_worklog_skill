@@ -1,9 +1,11 @@
 # Agent / host manifest for the Git Worklog skill.
 #
 # Subagent provider/model selection is NOT defined here. It lives in a single
-# machine-readable source — config/provider_models.json — resolved per host by
-# scripts/resolve_provider_model.py. This keeps one source of truth so the YAML,
-# references, and scripts can never drift to different model names.
+# machine-readable source — git_worklog/data/provider_models.json — resolved per
+# host by `git-worklog analyze prepare --host <key>`. This keeps one source of
+# truth so the YAML, references and engine can never drift to different model
+# names. It sits inside the package because only git_worklog* is packaged: from
+# outside, an installed CLI could not read it.
 
 name: git-worklog
 display_name: Git Worklog
@@ -40,7 +42,7 @@ ui:
 # the skill halts and asks — it never silently swaps to a pricier model,
 # auto-picks another, or degrades to commit-message-only. See that file's
 # model_unavailable_policy and references/provider-models.md.
-model_config: config/provider_models.json
+model_config: git_worklog/data/provider_models.json
 
 # Presentation shown when the user invokes /git-worklog with no arguments.
 default_prompt: |

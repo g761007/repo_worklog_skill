@@ -1,21 +1,27 @@
 # Date Parameter Contract
 
-This document describes the exact behaviour of `scripts/resolve_date_range.py`, the
-deterministic date contract for the `git-worklog` skill. The skill's model layer
-normalises free-form natural language into canonical parameters *before* calling
-this script; the script itself never parses free text. It only accepts the
-canonical parameters plus a small set of shortcuts, resolves them into concrete
-per-day time boundaries in the local timezone, and prints exactly one JSON object.
+This document describes the deterministic date contract for the `git-worklog`
+skill: one rule, implemented once in `git_worklog/dates.py`, which every command
+that needs a date reaches through. The skill's model layer normalises free-form
+natural language into canonical parameters *before* calling any of them; the
+contract itself never parses free text. It only accepts the canonical parameters
+plus a small set of shortcuts, and resolves them into concrete per-day time
+boundaries in the local timezone.
 
-Everything here is authoritative for the *implemented* script. Do not assume
-behaviour beyond what is documented below.
+You do not call it directly. `analyze prepare` takes these arguments and resolves
+them itself, then reports what it decided in its `range` and `timezone` fields.
+The arguments below are prepare's; the shell `scripts/resolve_date_range.py`
+takes the same ones over the same engine, for anyone who scripted against it.
+
+Everything here is authoritative for the *implemented* behaviour. Do not assume
+anything beyond what is documented below.
 
 ---
 
 ## 1. Command-line interface
 
 ```text
-python3 scripts/resolve_date_range.py [SHORTCUT] \
+python3 -m git_worklog analyze prepare [SHORTCUT] \
     [--date D] [--days N] [--from D] [--to D] \
     [--include-uncommitted] [--timezone IANA] [--today D]
 ```
@@ -28,11 +34,11 @@ python3 scripts/resolve_date_range.py [SHORTCUT] \
 | `--from D` | Range start, inclusive, `YYYY-MM-DD` (custom-range mode). |
 | `--to D` | Range end, inclusive, `YYYY-MM-DD` (custom-range mode). |
 | `--include-uncommitted` | Records intent to include working-tree changes. Applied to **today only**. |
-| `--timezone IANA` | Explicit IANA timezone override, e.g. `Asia/Taipei`. |
+| `--timezone IANA` | Explicit IANA timezone override, e.g. `Asia/Taipei`. Detected from the environment when omitted. |
 | `--today D` | Overrides "today" (`YYYY-MM-DD`) for deterministic runs. |
-| `--max-days N` | Maximum span in calendar days. Default `30`. |
+| `--max-days N` | Maximum span in calendar days. Default `30`. Report mode's readers raise it; `analyze prepare` does not offer it, because the cap exists to bound the per-day subagent cost that prepare is the one to spend. |
 
-The script exits `0` on success and `2` on any validation failure.
+Exit `0` on success, `2` on any validation failure.
 
 Natural language is normalised by the **model** before the script is called; the
 script never interprets free text.

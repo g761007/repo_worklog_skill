@@ -22,15 +22,19 @@ Markdown file per day under `.git-worklog/` and refresh `.git-worklog/index.md`,
 while preserving human notes.
 
 The deterministic work (date math, Git collection, Markdown surgery, preview
-integrity) is done by the `git-worklog` CLI and the scripts in `scripts/`. The
-judgement work (reading code, deciding what actually changed, writing the
-summary) is done by you and per-day subagents. **Never let commit messages stand
-in for reading the diff.**
+integrity) is done by the `git-worklog` CLI. The judgement work (reading code,
+deciding what actually changed, writing the summary) is done by you and per-day
+subagents. **Never let commit messages stand in for reading the diff.**
 
-`python3` and `git` must be available; nothing needs installing. Run the CLI as
-`python3 -m git_worklog <command>` and any script as `python3 scripts/<name>.py`,
-both from this directory. Each prints one JSON object to stdout. Exit `0` means
-ok, `1` means it ran and found a problem, `2` means it could not run.
+`python3` and `git` must be available; nothing needs installing. Run every
+command as `python3 -m git_worklog <command>` from this directory. Each prints
+one JSON object to stdout. Exit `0` means ok, `1` means it ran and found a
+problem, `2` means it could not run.
+
+**Use the CLI, never `scripts/`.** The `scripts/` directory holds thin
+command-line shells over the same engine, kept for anyone who scripted against
+them; they are not part of your flow and calling them will not give you a run id,
+a preview, or anything you can apply.
 
 ---
 
@@ -114,7 +118,7 @@ do not write files on a guess.
 
 Report mode reads the existing day files plus Git, writes nothing, and therefore
 has no dry-run or confirmation gate. Its one writing path is backfilling a gap,
-which hands back to §§2–8 for just those dates, dry-run and confirmation
+which hands back to §§2–6 for just those dates, dry-run and confirmation
 included.
 
 **The menu is generate-only.** Report mode is reached by natural language or
@@ -192,45 +196,7 @@ term in the output language is welcome; renaming it is not.
 
 ---
 
-## 3. Validate the date range (always first)
-
-```
-python3 scripts/resolve_date_range.py <args> [--timezone <IANA>] [--today <YYYY-MM-DD>]
-```
-
-Pass the canonical parameters, e.g. `--days 7`, `--date 2026-07-01`,
-`--from 2026-07-01 --to 2026-07-10`, or a shortcut like `7d`. Add
-`--include-uncommitted` when requested.
-
-- On `ok:false`, report the error to the user and stop. Common codes:
-  `TOO_MANY_DAYS` (show `requested_days`, ask to narrow), `ARG_CONFLICT`,
-  `DAYS_OUT_OF_RANGE`, `INVALID_DATE`, `FROM_AFTER_TO`, `TO_WITHOUT_FROM`.
-- On `ok:true`, keep `dates[]` (each has `date`, `start`, `end` half-open
-  bounds), `timezone`, and `timezone_source`. If `timezone_source` is
-  `system-offset` (no IANA name), tell the user which offset is assumed and
-  offer to set one.
-
-Timezone priority and half-open `[00:00, next 00:00)` day rule:
-`references/date-parameter-contract.md`.
-
----
-
-## 4. Detect repository state
-
-```
-python3 scripts/collect_git_history.py --repo <root> --info-only
-```
-
-- `NOT_A_GIT_REPO` → tell the user this directory is not a Git repository and stop.
-- Record `root`, `branch` (null if `detached_head`), `head`/`short_head`,
-  `has_commits`, `dirty_worktree`. These appear in the dry-run summary.
-- Empty repo (`has_commits:false`): with `include_uncommitted=false` there is
-  nothing to log — say so. With `include_uncommitted=true`, analyze only the
-  working tree.
-
----
-
-## 5. Per-day analysis — one Day Subagent per day
+## 3. Per-day analysis — one Day Subagent per day
 
 Two commands bracket this section. `analyze prepare` decides **what** must be
 analysed and **in which language**; `analyze collect` decides whether to
@@ -238,34 +204,63 @@ analysed and **in which language**; `analyze collect` decides whether to
 understanding the code, writing the prose — is yours and the subagents'. The CLI
 never does it and needs no model API key.
 
-**5a. Prepare the run** (deterministic, once for the whole range):
+**3a. Prepare the run** (deterministic, once for the whole range):
 
 ```
-python3 -m git_worklog analyze prepare --repo <root> \
-    --from <first date> --to <last date> --timezone <tz> \
+python3 -m git_worklog analyze prepare <range> --repo <root> \
+    --host <anthropic|openai|google> \
     --language <tag|auto> --language-source <source> \
-    --provider <provider> --model-json '<model object>' \
-    [--include-uncommitted]
+    [--timezone <IANA>] [--include-uncommitted]
 ```
+
+`<range>` is whatever the user asked for, in canonical form: a shortcut like
+`7d`, or `--date 2026-07-01`, `--days 7`, or `--from 2026-07-01 --to
+2026-07-10`. Do **not** resolve the dates yourself — pass what they said and let
+prepare answer. Do not compute a model either: `--host` is the host you are
+running under (Claude Code → `anthropic`, Codex → `openai`, Gemini → `google`),
+and prepare resolves that host's model from the packaged config. Never guess the
+host; if you cannot tell, ask.
 
 Returns `run_id`, `run_dir`, and `tasks[]` — one entry per calendar day, each
 with a `manifest_path` (what to analyse) and a `result_path` (where its analysis
 must be written). Keep all of it.
+
+It also tells you what it decided, which is what you show the user in the dry-run
+summary:
+
+- `range` — `{mode, from, to, days_count, today}`. The days it actually picked.
+  If the user said `7d`, this is which seven.
+- `timezone` — `{resolved, source}`. If `source` is `system-offset` (no IANA
+  name), tell the user which offset is assumed and offer to set one.
+- `repository` — `root`, `branch` (null if `detached_head`), `head`/`short_head`,
+  `has_commits`, `dirty_worktree`.
+- `provider` and `model` — what every subagent for this run will use.
+- `warnings[]` — surface these; do not swallow them. `DEPRECATED_ENV_VAR` means
+  an old variable name chose the model, and the user should know which knob did
+  it. `UNCOMMITTED_NOT_IN_RANGE` means their uncommitted work had nowhere to go.
+
+On `ok:false`, report the error and stop. Common codes: `TOO_MANY_DAYS` (show
+`requested_days`, ask to narrow), `NO_DATE_SPEC`, `ARG_CONFLICT`,
+`DAYS_OUT_OF_RANGE`, `INVALID_DATE`, `FROM_AFTER_TO`, `TO_WITHOUT_FROM`,
+`INVALID_TIMEZONE`, `UNKNOWN_HOST`, `MODEL_UNAVAILABLE` (halt and ask — never
+silently pick another model), `NOT_A_GIT_REPO` (tell the user this directory is
+not a Git repository and stop).
+
+Empty repo (`has_commits:false`): with no `--include-uncommitted` there is
+nothing to log — say so. With it, only the working tree is analysed.
+
+Timezone priority and the half-open `[00:00, next 00:00)` day rule:
+`references/date-parameter-contract.md`.
 
 `--language` and `--language-source` come from §2a. They are resolved **once**
 here and stamped on every manifest in the run: a manifest's `language.resolved`
 is what each day's result is checked against, and days that disagree block the
 whole run.
 
-Resolve `<provider>` and `<model object>` **once for the whole run** with
-`scripts/resolve_provider_model.py --host <anthropic|openai|google>` (see the
-model table below). `model` is an object — `{display_name, model_id}` plus
-`reasoning_effort` for openai only.
-
 Each manifest gives `file_groups` (grouped by real work area),
 `required_context`, `analysis_rules`, a `large_day` flag recommending Code
 Analysis Subagents when the day is big, `parts_dir` (where a fan-out's parts go
-— never beside the day's result, see below), `required_commit_file_pairs` (§5b),
+— never beside the day's result, see below), `required_commit_file_pairs` (§3b),
 and the day's authorship — `authors[]` (distinct names, first-appearance order)
 plus `commits[].author_name`. You render the `參與者` line and each
 `相關 commits` entry's author from these directly; the subagent never returns
@@ -279,7 +274,7 @@ tractable.
 
 Patches are **not** in the manifest — subagents read them with `git show`.
 
-**5b. What each day is held to.** Every manifest lists
+**3b. What each day is held to.** Every manifest lists
 `required_commit_file_pairs`: each (commit, file) the day touched, flagged
 `required` or not. **Required means the day's analysis must account for that
 file** — naming it in a work item's `files[]` is enough; an `evidence[]` citation
@@ -287,11 +282,11 @@ is stronger but not demanded. Only source files are required; docs, config, CI,
 tests, binaries and deleted files are listed but excused (a deleted file is gone
 from that commit's tree, so it *cannot* be cited).
 
-A required file the analysis never mentions fails the day at §5d. This is not
+A required file the analysis never mentions fails the day at §3d. This is not
 pedantry: a file that was changed but never described may never have been read,
 and that is invisible in a result that otherwise looks confident.
 
-**5c. Spawn one Day Subagent** per day, passing its `manifest_path` **and its
+**3c. Spawn one Day Subagent** per day, passing its `manifest_path` **and its
 `result_path`**. The subagent must read the real diffs and enough code context,
 determine the **end-of-day state** (a feature added then reverted the same day is
 *not* a live change), and **write** the structured JSON in
@@ -300,7 +295,7 @@ are never passed back as reply text, which drops and truncates them
 (`references/subagent-contract.md` §6a). It must not write to the worklog. Days
 with no commits still write `has_changes:false`.
 
-**5d. Collect every day's result** (deterministic), once all subagents finish:
+**3d. Collect every day's result** (deterministic), once all subagents finish:
 
 ```
 python3 -m git_worklog analyze collect --run-id <run_id> --repo <root>
@@ -315,7 +310,7 @@ line. It reports:
 - **A date in `missing` or `invalid` is a failed day, not an empty one** — never
   treat it as "nothing happened" and never fall back to its commit messages.
 - `unknown` is a result file the run never asked for. Do not merge it.
-- `partial_run:true` blocks apply by default (§9). Exit code is `1`.
+- `partial_run:true` blocks apply by default (§7). Exit code is `1`.
 
 Three things every result is checked against, and each fails the day:
 
@@ -327,7 +322,7 @@ Three things every result is checked against, and each fails the day:
   you can follow (#15). On a shallow clone unreachable commits report
   `EVIDENCE_UNVERIFIABLE` rather than failing the day — that is the runner's
   clone depth, not the subagent's fault.
-- **Coverage** — every required file (§5b) is mentioned somewhere.
+- **Coverage** — every required file (§3b) is mentioned somewhere.
   `COVERAGE_INCOMPLETE` names exactly which were not.
 
 If a day fails, fix the analysis — re-run that day's subagent against the same
@@ -338,9 +333,9 @@ paper over a gap with commit messages.
 For large days, the Day Subagent may fan out into Code Analysis Subagents grouped
 by feature/module (see `references/subagent-contract.md`).
 
-Model per host — resolve the provider you are running under with
-`resolve_provider_model.py --host <key>` and pass its `model_id` (cost-first
-defaults; single source is `config/provider_models.json`):
+Model per host — you pass `analyze prepare --host <key>` for the host you are
+running under, and it resolves the rest (cost-first defaults; single source is
+`git_worklog/data/provider_models.json`). Read `model` back off its output:
 
 | Host        | provider key | default display | default model_id      |
 |-------------|--------------|-----------------|-----------------------|
@@ -362,9 +357,9 @@ approval (a new dry-run + new `preview_id`). Details:
 
 ---
 
-## 6. Uncommitted changes (only when include_uncommitted=true)
+## 4. Uncommitted changes (only when include_uncommitted=true)
 
-Pass `--include-uncommitted` to `analyze prepare` (§5a). It classifies
+Pass `--include-uncommitted` to `analyze prepare` (§3a). It classifies
 `staged` / `unstaged` / `untracked` (binary-aware), puts them on **today's**
 manifest as `uncommitted_changes[]`, and returns a `worktree_fingerprint` on the
 run.
@@ -376,14 +371,11 @@ is outside the range, prepare warns `UNCOMMITTED_NOT_IN_RANGE` rather than
 silently dropping it. Present it in its own `### 尚未提交的異動` section, split
 into staged / unstaged / untracked, and never describe it as committed.
 
-`scripts/inspect_worktree.py --repo <root>` still exists if you need the
-worktree on its own.
-
 ---
 
-## 7. Merge results, generate Markdown, dry-run
+## 5. Merge results, generate Markdown, dry-run
 
-1. Merge the per-day results from `analyze collect` (§5d). If it reports any
+1. Merge the per-day results from `analyze collect` (§3d). If it reports any
    `missing`, `invalid`, `degraded` or `unknown` date — i.e. `partial_run` —
    mark the run **partial** and default to blocking apply (see error handling
    below).
@@ -443,7 +435,7 @@ one the user decided against.
 
 ---
 
-## 8. Apply only after explicit confirmation
+## 6. Apply only after explicit confirmation
 
 Natural-language confirmations ("寫入", "確認更新", "套用剛才的預覽", "把這份寫進去")
 or `apply <preview_id>`.
@@ -479,16 +471,15 @@ git-worklog apply --preview-id <preview_id>
    | `PREVIEW_FAILED` | An earlier apply failed and rolled back. Not retryable. |
    | `PREVIEW_INTERRUPTED` | An apply died mid-write; whether it wrote is unknown. Check `.git-worklog/` before doing anything else. |
    | `APPLY_LOCKED` | Another apply is writing to this worklog. Wait. |
-   | `INDEX_WRITE_FAILED` | The day files **were** written; only `index.md` was not. No data is lost — repair with `rebuild_worklog_index.py --dir .git-worklog --apply`. |
+   | `INDEX_WRITE_FAILED` | The day files **were** written; only `index.md` was not. No data is lost — the index is a pure function of the day files, so repair it with `python3 -m git_worklog reindex --apply`. |
 
-3. Confirm with `validate_daily_worklog.py --dir .git-worklog` and
-   `validate_worklog_index.py --dir .git-worklog`, then report the actual
+3. Confirm with `python3 -m git_worklog validate`, then report the actual
    update from apply's own output: `written_dates`, `preserved_manual_dates`,
    `index_action`, and the target directory.
 
 ---
 
-## 9. Error handling (summary)
+## 7. Error handling (summary)
 
 - **Not a Git repo / >30 days / corrupt markers / non-UTF-8:** stop, report,
   never auto-repair. `preview` refuses a corrupt target day file
@@ -504,10 +495,10 @@ git-worklog apply --preview-id <preview_id>
   file; show the diff, keep MANUAL, and require explicit confirmation to clear
   GENERATED.
 - **A legacy worklog is present:** never migrate automatically. Offer
-  `migrate_legacy_worklog.py` (dry-run + confirm); it never deletes the source.
-  Two shapes qualify — a flat `PROJECT_WORKLOG/` directory (`--from-dir`) and the
-  single `docs/PROJECT_WORKLOG.md` (`--from-file`). With neither flag the script
-  auto-detects, directory first.
+  `python3 -m git_worklog migrate` (dry-run + confirm); it never deletes the
+  source. Two shapes qualify — a flat `PROJECT_WORKLOG/` directory
+  (`--from-dir`) and the single `docs/PROJECT_WORKLOG.md` (`--from-file`). With
+  neither flag it auto-detects, directory first.
 - **Writing refused with `LEGACY_LAYOUT`:** the target directory still holds its
   day files at the root rather than under `days/`. Do not work around it by
   passing a different `--dir` — offer the migration. Reading a legacy directory
@@ -517,7 +508,7 @@ Full rules: `references/interaction-flow.md`, `references/code-analysis-rules.md
 
 ---
 
-## Reference & script map
+## Reference & command map
 
 | Need | Read |
 |------|------|
@@ -529,35 +520,20 @@ Full rules: `references/interaction-flow.md`, `references/code-analysis-rules.md
 | Directory layout, day/index markers, create/overwrite, migration | `references/worklog-format.md` |
 | Per-host models, overrides, unavailable-model handling, escalation | `references/provider-models.md` |
 
-The analysis pipeline is driven by the CLI (§5). Run it as
-`python3 -m git_worklog <command>` from this directory — no install needed, same
-as the scripts:
+Every deterministic step is a CLI command (§3). Run each as
+`python3 -m git_worklog <command>` from this directory — no install needed. This
+is the whole surface you need; there is nothing in `scripts/` that is not here.
 
 | Command | Role |
 |---------|------|
-| `analyze prepare` | Mint a run; write one manifest per day (what to analyse, in which language, which files are required, where to write the result) |
+| `analyze prepare` | Mint a run: resolve the range, timezone and model, then write one manifest per day (what to analyse, in which language, which files are required, where to write the result) |
 | `analyze collect` | Read the run's results back and check them: schema, language, evidence accuracy, coverage, missing/unknown days |
 | `preview` | Freeze the apply: store every target file's final text, the fingerprints, the language and a TTL. Returns a `preview_id`. Writes nothing |
 | `apply` | Write that stored payload after re-checking the world. Takes a `preview_id` and nothing else |
+| `coverage` | Report mode: per-date `covered` / `gap` / `no-commits`. Exit `1` means a gap — real work nothing has analysed |
+| `refs` | Report mode: resolve a tag/ref to its authoritative commit set + derived dates |
+| `migrate` | One-time migration of a legacy worklog (flat `PROJECT_WORKLOG/`, or the single `docs/PROJECT_WORKLOG.md`) into `.git-worklog/`. Dry-run unless `--apply` |
+| `reindex` | Rebuild `index.md` from the day files. Normal runs never need it — `apply` does it — but it is the repair for `INDEX_WRITE_FAILED` |
 | `doctor` | Is this environment able to run the tool? |
-| `validate` | Is the worklog on disk well-formed? |
+| `validate` | Is the worklog on disk well-formed? Day markers, index links, config, language stamps |
 | `version` | CLI / layout / config-schema versions |
-
-The rest of the deterministic work is still scripts:
-
-| Script | Role |
-|--------|------|
-| `resolve_provider_model.py` | Resolve the per-host subagent provider/model (single source `config/provider_models.json`; overrides, escalation, halt-and-ask) |
-| `resolve_date_range.py` | Parse/validate dates, timezone, day-span limit (`--max-days`, default 30), per-day bounds |
-| `resolve_ref_range.py` | Report mode: resolve a tag/ref to its authoritative commit set + derived dates |
-| `check_worklog_coverage.py` | Report mode: per-date coverage — `covered` / `gap` / `no-commits` |
-| `collect_git_history.py` | Repo metadata + per-day commit facts (no summaries, no author filter); `--info-only` for §4 |
-| `inspect_worktree.py` | Staged/unstaged/untracked + worktree fingerprint on its own (`analyze prepare --include-uncommitted` does this for a run) |
-| `build_analysis_manifest.py` | One day's manifest from history JSON on stdin (`analyze prepare` does this for a whole range) |
-| `collect_day_results.py` | Read back and validate results in a flat run dir. Cannot check coverage — it never sees a manifest, so it does not pretend to. Prefer `analyze collect` |
-| `update_daily_worklog.py` | Simulate/apply per-day files outside a run. `preview`/`apply` do this for a real run, and only they freeze the payload — prefer them |
-| `rebuild_worklog_index.py` | Rebuild `index.md` from day files (descending, summaries); preserve index MANUAL; atomic write. Also the repair for `INDEX_WRITE_FAILED` |
-| `validate_daily_worklog.py` | Per-day file marker/title/UTF-8 validation |
-| `validate_worklog_index.py` | Index marker/order/link/UTF-8 validation |
-| `migrate_legacy_worklog.py` | One-time migration of a legacy worklog (flat `PROJECT_WORKLOG/`, or the single `docs/PROJECT_WORKLOG.md`) into `.git-worklog/` |
-| `worklog_markers.py` | Shared day/index parser/serialiser (imported by the scripts above) |

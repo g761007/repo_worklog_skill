@@ -2,8 +2,9 @@
 
 How the skill turns a `/git-worklog` invocation (menu pick, natural language, or
 direct parameters) into a validated request, a dry-run preview, and finally an
-apply. The deterministic work is done by `scripts/`; every script is run as
-`python3 scripts/<name>.py` and prints one JSON object with `ok:true`/`ok:false`.
+apply. The deterministic work is done by the CLI; every command is run as
+`python3 -m git_worklog <command>` and prints one JSON object with
+`ok:true`/`ok:false`.
 
 This file covers the menu, option numbers, natural-language and direct-parameter
 entry, the dry-run summary, confirmation, apply-time re-verification, and partial
@@ -51,9 +52,9 @@ When `/git-worklog` is invoked with **no usable arguments**, print this menu
 With no arguments the skill **only prints the menu and waits**. It must NOT, at
 this point:
 
-- scan Git history (no `collect_git_history.py`, not even `--info-only`),
+- scan Git history,
 - spawn any Day Subagent,
-- run `resolve_date_range.py` or any other script,
+- run `analyze prepare` or any other command that reads the repository,
 - generate a worklog preview,
 - create or modify any file.
 
@@ -140,26 +141,30 @@ straight to validation and analysis. `7d` / `30d` are positional shortcuts;
 
 ---
 
-## 5. Validate, then analyse
+## 5. Normalise, then analyse
 
-Whatever the entry path, normalise to canonical parameters and validate the range
-first:
+Whatever the entry path, normalise to canonical parameters and hand them to
+`analyze prepare`, which validates the range, the timezone, the model and the
+repository together before writing a single task:
 
 ```
-python3 scripts/resolve_date_range.py <args> [--timezone <IANA>] [--today <YYYY-MM-DD>]
+python3 -m git_worklog analyze prepare <range> --repo <root> --host <key> \
+    [--timezone <IANA>] [--today <YYYY-MM-DD>] [--include-uncommitted]
 ```
 
-Pass the resolved parameters as flags — `--date`, `--days`, `--from`/`--to`, a
-positional shortcut (`7d` | `30d` | `YYYY-MM-DD`), and `--include-uncommitted`
-when requested. On `ok:false`, report the error and stop; do not start any
-subagent. Error codes include `NO_DATE_SPEC`, `ARG_CONFLICT`,
-`DAYS_OUT_OF_RANGE`, `INVALID_DATE`, `FROM_AFTER_TO`, `FROM_WITHOUT_TO`,
-`TO_WITHOUT_FROM`, and `TOO_MANY_DAYS` (which reports `requested_days` and
-`max_days` — show the requested count and ask the user to narrow). Detail:
-`references/date-parameter-contract.md`.
+`<range>` is `--date`, `--days`, `--from`/`--to`, or a positional shortcut
+(`7d` | `30d` | `YYYY-MM-DD`). Do not resolve the dates yourself; pass what the
+user asked for and read `range` back off the answer.
 
-On `ok:true`, proceed to repository detection and per-day analysis (SKILL.md
-sections 4–7), which always ends in a dry-run.
+On `ok:false`, report the error and stop; do not start any subagent. Error codes
+include `NO_DATE_SPEC`, `ARG_CONFLICT`, `DAYS_OUT_OF_RANGE`, `INVALID_DATE`,
+`FROM_AFTER_TO`, `FROM_WITHOUT_TO`, `TO_WITHOUT_FROM`, `INVALID_TIMEZONE`,
+`UNKNOWN_HOST`, `NOT_A_GIT_REPO`, and `TOO_MANY_DAYS` (which reports
+`requested_days` and `max_days` — show the requested count and ask the user to
+narrow). Detail: `references/date-parameter-contract.md`.
+
+On `ok:true`, proceed to per-day analysis (SKILL.md §3), which always ends in a
+dry-run.
 
 ---
 
@@ -191,9 +196,9 @@ following fields:
 - the `preview_id`
 - the line **`No files have been modified.`**
 
-**Subagent configuration block.** Resolved once by
-`resolve_provider_model.py --host <key>`. When every day uses the same model,
-show it once:
+**Subagent configuration block.** Read `provider` and `model` off `analyze
+prepare`'s output — it resolved them once for the whole run from `--host <key>`.
+When every day uses the same model, show it once:
 
 ```
 Subagent configuration:
@@ -304,8 +309,8 @@ transaction and rebuilds `index.md`, under a per-worklog lock so two applies
 cannot interleave. `.git-worklog/` is created now if it was missing.
 
 On success it returns `written_dates`, `preserved_manual_dates`, `index_action`
-and `worklog_dir`. Run `validate_daily_worklog.py --dir .git-worklog` and
-`validate_worklog_index.py --dir .git-worklog`, then report the actual update.
+and `worklog_dir`. Run `python3 -m git_worklog validate`, then report the
+actual update.
 
 **On any refusal, do not write.** Explain the reason and build a fresh preview;
 never work around a refusal:
@@ -319,7 +324,7 @@ never work around a refusal:
 | `PREVIEW_FAILED` | An earlier apply failed and was rolled back. Build a new one rather than retrying. |
 | `PREVIEW_INTERRUPTED` | An apply died after confirming, so whether it wrote is unknown. Tell the user to check `.git-worklog/` before anything else. |
 | `APPLY_LOCKED` | Another apply is writing to this worklog. Wait for it; do not force. |
-| `INDEX_WRITE_FAILED` | The day files **were** written; only `index.md` was not. No day data is lost — repair with `rebuild_worklog_index.py --dir .git-worklog --apply`. |
+| `INDEX_WRITE_FAILED` | The day files **were** written; only `index.md` was not. No day data is lost — the index is a pure function of the day files, so repair it with `python3 -m git_worklog reindex --apply`. |
 
 Preview records live in `~/.git-worklog/previews/`, outside the repo.
 `git-worklog preview --show <id> --check` reports a preview's current state

@@ -7,7 +7,10 @@ decide what must be analysed and check what came back, while the analysis itself
 stays with the hosting agent's LLM. The CLI does not replace it and needs no
 model API key (§6.1). ``preview`` and ``apply`` (§10) close the loop: the first
 turns a collected run plus the agent's prose into a frozen payload, the second
-writes that payload and takes no other input.
+writes that payload and takes no other input. ``coverage`` and ``refs`` serve
+report mode's two questions — "is there an analysis behind these dates?" and
+"which commits is this version actually made of?" — and ``migrate`` (§2.4) moves
+a legacy worklog into the current layout.
 
 Every subcommand prints one JSON object to stdout, matching the scripts'
 contract, so the same parsing works everywhere. ``--text`` switches to a
@@ -67,12 +70,23 @@ def build_parser() -> argparse.ArgumentParser:
                             required=True)
 
     prep = asub.add_parser("prepare", help="Mint a run and write one manifest per day.")
-    prep.add_argument("--from", required=True, metavar="DATE",
-                      help="First day to analyse (YYYY-MM-DD, inclusive).")
-    prep.add_argument("--to", required=True, metavar="DATE",
-                      help="Last day to analyse (YYYY-MM-DD, inclusive).")
-    prep.add_argument("--timezone", required=True, metavar="TZ",
-                      help="IANA timezone deciding where each day starts.")
+    prep.add_argument("shortcut", nargs="?", metavar="SHORTCUT",
+                      help="Date shortcut: NNd (last N days, e.g. 7d) or a bare "
+                           "YYYY-MM-DD. Alternative to the flags below.")
+    prep.add_argument("--date", metavar="DATE", help="A single day (YYYY-MM-DD).")
+    prep.add_argument("--days", type=int, metavar="N",
+                      help="The last N calendar days, including today.")
+    prep.add_argument("--from", metavar="DATE",
+                      help="First day to analyse (YYYY-MM-DD, inclusive). Needs --to.")
+    prep.add_argument("--to", metavar="DATE",
+                      help="Last day to analyse (YYYY-MM-DD, inclusive). Needs --from.")
+    prep.add_argument("--timezone", metavar="TZ",
+                      help="IANA timezone deciding where each day starts. Detected "
+                           "from the environment when omitted; the run reports "
+                           "which zone it used and where that came from.")
+    prep.add_argument("--today", metavar="DATE",
+                      help="Override today's date (YYYY-MM-DD) for deterministic "
+                           "runs. Affects NNd/--days and where uncommitted work lands.")
     prep.add_argument("--repo", default=".", help="Repository to read (default: cwd).")
     prep.add_argument("--dir", help="Worklog directory, read for its config.json "
                                     f"language setting (default: ./{wm.WORKLOG_DIRNAME}).")
@@ -89,11 +103,25 @@ def build_parser() -> argparse.ArgumentParser:
                            "changes. They are attributed to today and to no other "
                            "day; if today is outside --from/--to they are left out "
                            "and the run says so.")
-    prep.add_argument("--provider", default="anthropic",
-                      help="Subagent provider key (anthropic / openai / google).")
+    prep.add_argument("--host", metavar="KEY",
+                      help="Detected agent host (anthropic / openai / google). "
+                           "Resolves the subagent model from the packaged config, "
+                           "honouring $GIT_WORKLOG_<HOST>_MODEL and --model. The "
+                           "host is never guessed: unknown or unconfigured is an "
+                           "error, not a fallback to the first provider.")
+    prep.add_argument("--model", default="",
+                      help="Explicit model id, the highest-precedence override. "
+                           "Needs --host.")
+    prep.add_argument("--escalate", action="store_true",
+                      help="Use the host's escalation_model_id. Opt-in only, after "
+                           "the user approves an escalation re-run. Needs --host.")
+    prep.add_argument("--provider", default=None,
+                      help="Subagent provider key, stated rather than resolved "
+                           "(default: anthropic). Use --host instead unless you "
+                           "already hold the model object.")
     prep.add_argument("--model-json", default="",
                       help="Structured model object (JSON: {display_name, "
-                           "model_id[, reasoning_effort]}).")
+                           "model_id[, reasoning_effort]}). Goes with --provider.")
     prep.add_argument("--language", default="auto",
                       help="Content language for the worklog as a BCP 47 tag "
                            "(zh-TW, en, ja), or 'auto' to fall through to project "
@@ -145,6 +173,89 @@ def build_parser() -> argparse.ArgumentParser:
                          "content comes from the record, never from the caller.")
     ap.add_argument("--now", help="Override current time (ISO 8601) for "
                                   "deterministic runs.")
+
+    cov = sub.add_parser("coverage",
+                         help="Which dates have a worklog behind them (report mode).")
+    # Two ways in, because report mode has two scopes: a date scope is a range,
+    # a ref scope is whatever days a tag's commits landed on — an arbitrary set.
+    cov.add_argument("shortcut", nargs="?", metavar="SHORTCUT",
+                     help="Date shortcut: NNd or a bare YYYY-MM-DD.")
+    cov.add_argument("--date", metavar="DATE", help="A single day (YYYY-MM-DD).")
+    cov.add_argument("--days", type=int, metavar="N",
+                     help="The last N calendar days, including today.")
+    cov.add_argument("--from", metavar="DATE", help="Range start (inclusive).")
+    cov.add_argument("--to", metavar="DATE", help="Range end (inclusive).")
+    cov.add_argument("--dates", metavar="LIST",
+                     help="Exact days as a comma-separated list, e.g. "
+                          "2026-07-01,2026-07-02. For a ref scope, whose dates "
+                          "are a set with gaps rather than a span.")
+    cov.add_argument("--today", metavar="DATE",
+                     help="Override today's date for deterministic runs.")
+    # Defaulted by the engine, not here: naming the number would mean importing
+    # analysis.coverage (and history, and Git) to build a parser that `version`
+    # also uses. Same reason as --ttl-seconds below.
+    cov.add_argument("--max-days", type=int, default=None,
+                     help="Maximum span in calendar days (default: 90). Higher "
+                          "than generation's 30: report mode reads day files and "
+                          "spawns no subagents, so the cost that cap bounds is "
+                          "not at stake.")
+    cov.add_argument("--repo", default=".", help="Repository to read (default: cwd).")
+    cov.add_argument("--dir", default=wm.WORKLOG_DIRNAME,
+                     help="Worklog directory, absolute or relative to the repo "
+                          f"root (default: {wm.WORKLOG_DIRNAME}).")
+    cov.add_argument("--timezone", default=None,
+                     help="IANA timezone deciding each day's bounds. Detected "
+                          "from the environment when omitted; with --dates it "
+                          "defaults to UTC.")
+    cov.add_argument("--date-field", choices=["committer", "author"],
+                     default="committer",
+                     help="Which date decides day attribution (default: committer).")
+    cov.add_argument("--worklog-dir", default=None,
+                     help="Repo-relative worklog path whose commits count as "
+                          "self-referential and are excluded from the counts.")
+
+    rf = sub.add_parser("refs",
+                        help="Resolve a tag into its commit set (report mode).")
+    rf.add_argument("--tag", help="Tag to report on; its predecessor is found "
+                                  "automatically.")
+    rf.add_argument("--from-ref", help="Explicit range start, exclusive (any ref).")
+    rf.add_argument("--to-ref", help="Explicit range end, inclusive (any ref).")
+    rf.add_argument("--list-tags", action="store_true",
+                    help="List the repository's tags, newest-first.")
+    rf.add_argument("--repo", default=".", help="Repository to read (default: cwd).")
+    rf.add_argument("--timezone", default="UTC",
+                    help="IANA timezone deciding each commit's calendar day "
+                         "(default: UTC).")
+    rf.add_argument("--date-field", choices=["committer", "author"],
+                    default="committer",
+                    help="Which date decides day attribution (default: committer).")
+
+    mg = sub.add_parser("migrate",
+                        help="Move a legacy worklog into .git-worklog/ (dry-run "
+                             "by default).")
+    mg.add_argument("--from-dir", dest="from_dir",
+                    help="Flat legacy worklog directory (v0.2-v0.5).")
+    mg.add_argument("--from-file", dest="from_file",
+                    help="Single-file legacy worklog (pre-v0.2).")
+    mg.add_argument("--dir", help=f"Target worklog directory (default: "
+                                  f"{wm.WORKLOG_DIRNAME}).")
+    mg.add_argument("--timezone",
+                    help="Timezone recorded in config.json, and in each day file's "
+                         "header when migrating from a single file. Ignored for "
+                         "--from-dir, whose day files already record their own.")
+    mg.add_argument("--apply", action="store_true",
+                    help="Write the migration. Without this the run is a dry-run.")
+
+    ri = sub.add_parser("reindex",
+                        help="Rebuild index.md from the day files (dry-run by "
+                             "default). The repair for INDEX_WRITE_FAILED.")
+    ri.add_argument("--dir", help=f"Worklog directory (default: "
+                                  f"{wm.WORKLOG_DIRNAME}).")
+    ri.add_argument("--language", default=None,
+                    help="Language for the index, used only when it does not "
+                         "exist yet. An index that already has one keeps it.")
+    ri.add_argument("--apply", action="store_true",
+                    help="Write index.md. Without this the run is a dry-run.")
     return p
 
 
@@ -156,19 +267,32 @@ def main(argv: "list[str] | None" = None) -> int:
         return 0
 
     # Imported lazily so `git-worklog version` stays fast and cannot be broken
-    # by an unrelated subcommand's import.
+    # by an unrelated subcommand's import. Spelled out rather than defaulted:
+    # argparse already rejects an unknown command, so a name reaching here with
+    # no module is a wiring mistake, and it should say so instead of quietly
+    # running whichever subcommand happened to be the fallback.
     if args.command == "version":
         from git_worklog.cli import version as cmd
     elif args.command == "doctor":
         from git_worklog.cli import doctor as cmd
+    elif args.command == "validate":
+        from git_worklog.cli import validate as cmd
     elif args.command == "analyze":
         from git_worklog.cli import analyze as cmd
     elif args.command == "preview":
         from git_worklog.cli import preview as cmd
     elif args.command == "apply":
         from git_worklog.cli import apply as cmd
+    elif args.command == "coverage":
+        from git_worklog.cli import coverage as cmd
+    elif args.command == "refs":
+        from git_worklog.cli import refs as cmd
+    elif args.command == "migrate":
+        from git_worklog.cli import migrate as cmd
+    elif args.command == "reindex":
+        from git_worklog.cli import reindex as cmd
     else:
-        from git_worklog.cli import validate as cmd
+        raise AssertionError(f"no module wired for command {args.command!r}")
 
     # §6.2.13 keeps interface language and content language apart. Phase one
     # ships English messages only -- which the roadmap allows -- but an

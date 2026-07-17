@@ -1,5 +1,5 @@
 {
-  "_comment": "Subagent model selection per host — SINGLE SOURCE OF TRUTH. The skill selects the provider it is currently running under and passes that provider's model_id to build_analysis_manifest.py and every spawned day / code-analysis subagent. Defaults prioritise cost efficiency for bounded, per-day repository analysis. Do NOT silently replace these models with more expensive ones. Resolved by scripts/resolve_provider_model.py; mirrored (human-facing) in references/provider-models.md.",
+  "_comment": "Subagent model selection per host — SINGLE SOURCE OF TRUTH. The skill selects the provider it is currently running under and passes that provider's model_id to every spawned day / code-analysis subagent. Defaults prioritise cost efficiency for bounded, per-day repository analysis. Do NOT silently replace these models with more expensive ones. Resolved by git_worklog/providers.py (`git-worklog analyze prepare --host <key>`); mirrored (human-facing) in references/provider-models.md. It lives inside the package, not in a sibling config/ directory, because only git_worklog* is packaged — from outside, an installed CLI could not read it.",
   "providers": {
     "anthropic": {
       "display_name": "Claude Haiku 4.5",

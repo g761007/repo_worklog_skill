@@ -22,10 +22,10 @@ git-worklog/                  # the skill (this whole directory is the skill)
 ├── SKILL.md                  # control layer: triggers, flow, script/reference map
 ├── agents/
 │   └── openai.yaml           # host manifest: display name, UI metadata, model_config pointer
-├── config/
-│   └── provider_models.json  # single source of truth for per-host subagent models
 ├── git_worklog/              # the engine + `git-worklog` CLI (stdlib only)
 │   ├── __init__.py           # __version__ — the single source of the product version
+│   ├── data/
+│   │   └── provider_models.json  # single source of truth for per-host subagent models
 │   ├── markers.py            # day/index parser/serialiser; the format's definition
 │   ├── paths.py              # user-level state dir ($GIT_WORKLOG_HOME, ~/.git-worklog)
 │   ├── language.py           # BCP 47 resolution; the run's one output language
@@ -60,6 +60,9 @@ git-worklog/                  # the skill (this whole directory is the skill)
     ├── subagent-contract.md
     ├── worklog-format.md
     └── provider-models.md
+
+tools/
+└── build_skill_zip.py        # build/verify skill.zip; ships what git tracks
 
 docs/
 ├── naming-conventions.md     # canonical names: brand, skill, CLI, package, directories
@@ -259,7 +262,7 @@ the old file, and refuses if the legacy markers are corrupt.
   treated as the same setting. Paths, code symbols, commit hashes and API names
   are never translated in any language. `index.md` fixes its language on first
   build so it does not churn between contributors. See roadmap §6.2.
-- **Subagent models:** defined once in `git-worklog/config/provider_models.json`
+- **Subagent models:** defined once in `git-worklog/git_worklog/data/provider_models.json`
   (cost-first defaults — Claude Haiku 4.5 / GPT-5.6 Luna / Gemini 3.5 Flash) and
   resolved per host by `resolve_provider_model.py`. Override with
   `GIT_WORKLOG_{ANTHROPIC,OPENAI,GOOGLE}_MODEL` or an explicit `--model`. See
@@ -272,20 +275,38 @@ the old file, and refuses if the legacy markers are corrupt.
 
 ### Development commands
 
-Each script is standalone and prints one JSON object to stdout:
+Every command prints one JSON object to stdout; `--text` renders it for humans.
+No install needed — run them from the skill directory:
 
 ```bash
 cd git-worklog
-python3 scripts/resolve_date_range.py --days 7 --timezone Asia/Taipei --today 2026-07-15
-python3 scripts/collect_git_history.py --repo /path/to/repo --info-only
-python3 scripts/update_daily_worklog.py --dir /tmp/.git-worklog <<'JSON'
-{"meta": {"timezone": "Asia/Taipei", "branch": "main", "head": "abc1234"},
- "entries": {"2026-07-15": {"generated_markdown": "## 當日摘要\n\n..."}}}
-JSON
-python3 scripts/rebuild_worklog_index.py --dir /tmp/.git-worklog
-python3 scripts/validate_daily_worklog.py --dir /tmp/.git-worklog
-python3 scripts/validate_worklog_index.py --dir /tmp/.git-worklog
+python3 -m git_worklog version
+python3 -m git_worklog --text doctor
+python3 -m git_worklog --text validate --dir /tmp/.git-worklog
+python3 -m git_worklog --text coverage 7d --repo /path/to/repo --timezone Asia/Taipei
+python3 -m git_worklog --text refs --repo /path/to/repo --list-tags
+python3 -m git_worklog --text reindex --dir /tmp/.git-worklog
 ```
+
+`scripts/` holds thin shells over the same engine, kept for anyone who scripted
+against them. They are not the skill's path and not where new work goes.
+
+### Building the release archive
+
+```bash
+python3 tools/build_skill_zip.py            # writes ./skill.zip
+python3 tools/build_skill_zip.py --check    # verify an existing one
+```
+
+What ships is whatever `git ls-files git-worklog/` reports, so `.gitignore` is
+the only place that decides what counts as build litter — there is no second
+exclusion list to drift from it. The consequence: the archive contains what is
+**committed**, and uncommitted edits do not ship.
+
+It stages the skill under `git-worklog/`, so the directory a user unzips is the
+name Claude Code triggers on. CI builds it on every PR, unzips it, and runs the
+CLI out of it with nothing installed, because a broken archive is otherwise
+invisible until release day.
 
 ### Tests
 
@@ -351,7 +372,6 @@ subagent 分析，所有變更都先以 dry-run 預覽，**經你明確確認後
 - `git-worklog/`：整個目錄就是 skill 本體。
   - `SKILL.md`：控制層——觸發條件、流程、腳本與 references 對照。
   - `agents/openai.yaml`：宿主 manifest——顯示名稱、UI metadata、model_config 指標。
-  - `config/provider_models.json`：逐宿主 subagent 模型的**單一設定來源**。
   - `scripts/`：套件的命令列薄殼（僅用標準庫，各自輸出單一 JSON）。
     - `resolve_provider_model.py`：依宿主解析 provider／模型（覆寫、escalation、halt-and-ask）。
     - `resolve_date_range.py`：日期／時區解析、日數上限（`--max-days`，預設 30）、逐日半開區間。
@@ -369,6 +389,8 @@ subagent 分析，所有變更都先以 dry-run 預覽，**經你明確確認後
     - `worklog_markers.py`：相容轉接層，實際模組為 `git_worklog.markers`。
   - `git_worklog/`：引擎與 `git-worklog` CLI 本體（僅標準庫）。
     - `__init__.py`：`__version__`——產品版本的單一來源。
+    - `data/provider_models.json`：逐宿主 subagent 模型的**單一設定來源**（放在
+      套件內，安裝版 CLI 才讀得到）。
     - `markers.py`：日期檔／索引的解析與序列化，即格式的定義。
     - `paths.py`：使用者層級狀態目錄（`$GIT_WORKLOG_HOME`、`~/.git-worklog`）。
     - `language.py`：BCP 47 語言解析——一個 run 只有一種輸出語言。
@@ -556,7 +578,7 @@ skill 會明講並詢問是否先補齊——**絕不默默降級成摘要 commi
   `zh-TW` 與 `zh-CN` 永不視為同一設定。任何語言下，檔案路徑、程式符號、commit hash
   與 API 名稱都不翻譯。`index.md` 於首次建立時固定語言，避免不同貢獻者反覆改寫。
   詳見 roadmap §6.2。
-- **Subagent 模型**：於 `git-worklog/config/provider_models.json` 統一設定
+- **Subagent 模型**：於 `git-worklog/git_worklog/data/provider_models.json` 統一設定
   （成本優先預設——Claude Haiku 4.5 ／ GPT-5.6 Luna ／ Gemini 3.5 Flash），由
   `resolve_provider_model.py` 依宿主解析；可用
   `GIT_WORKLOG_{ANTHROPIC,OPENAI,GOOGLE}_MODEL` 或 `--model` 覆寫，詳見
@@ -582,6 +604,38 @@ skill 會明講並詢問是否先補齊——**絕不默默降級成摘要 commi
   已套用，一律拒絕，而不是自行調和。
 - 同一份工作日誌的並行 apply 會被鎖擋下；只有在持有者確定已死時才會破鎖。
 - Skill 絕不執行 `git add/commit/push/fetch/pull/checkout/switch/merge/rebase`。
+
+### 開發指令
+
+每個指令都輸出單一 JSON 物件；`--text` 則渲染成人類可讀格式。不需安裝，直接在
+skill 目錄下執行：
+
+```bash
+cd git-worklog
+python3 -m git_worklog version
+python3 -m git_worklog --text doctor
+python3 -m git_worklog --text validate --dir /tmp/.git-worklog
+python3 -m git_worklog --text coverage 7d --repo /path/to/repo --timezone Asia/Taipei
+python3 -m git_worklog --text refs --repo /path/to/repo --list-tags
+```
+
+`scripts/` 是同一套引擎的命令列薄殼，保留給曾經接過它們的腳本；那不是 skill 的
+路徑，新功能也不寫在那裡。
+
+### 打包發布用的封存檔
+
+```bash
+python3 tools/build_skill_zip.py            # 產生 ./skill.zip
+python3 tools/build_skill_zip.py --check    # 驗證既有的封存檔
+```
+
+出貨內容完全由 `git ls-files git-worklog/` 決定，因此 `.gitignore` 是唯一定義
+「什麼算建置垃圾」的地方——沒有第二份排除清單可以跟它漂移。代價是：封存檔裝的是
+**已提交**的內容，未提交的修改不會進去。
+
+它會把 skill 打包在 `git-worklog/` 之下，讓使用者解壓後的目錄名等於 Claude Code
+的觸發名。CI 每個 PR 都會建置、解壓，並在完全未安裝的情況下跑一次 CLI——否則壞掉的
+封存檔要到發布當天才會被發現。
 
 ### 測試
 

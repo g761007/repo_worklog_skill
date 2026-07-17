@@ -211,12 +211,20 @@ class TestPrepare(_Run):
                 self.assertEqual(json.load(fh)["language"]["resolved"], "ja")
 
     def test_reversed_range_refused(self):
+        """A reversed range is FROM_AFTER_TO -- the documented code, everywhere.
+
+        prepare used to answer BAD_RANGE here, a name that appeared in no
+        reference and existed only because prepare carried its own copy of the
+        date rule. `date-parameter-contract.md`'s error table has always called
+        this FROM_AFTER_TO. Now that one module decides it, the same mistake gets
+        the same answer whichever front end the user reached for.
+        """
         d, rc, _ = run_cli("analyze", "prepare", "--repo", _REPO,
                            "--from", "2026-07-17", "--to", "2026-07-15",
                            "--timezone", "Asia/Taipei", env=self.env)
         self.assertFalse(d["ok"])
         self.assertEqual(rc, 2)
-        self.assertEqual(d["errors"][0]["code"], "BAD_RANGE")
+        self.assertEqual(d["errors"][0]["code"], "FROM_AFTER_TO")
 
     def test_unknown_timezone_refused(self):
         d, rc, _ = run_cli("analyze", "prepare", "--repo", _REPO,
@@ -225,6 +233,160 @@ class TestPrepare(_Run):
         self.assertFalse(d["ok"])
         self.assertEqual(rc, 2)
         self.assertEqual(d["errors"][0]["code"], "INVALID_TIMEZONE")
+
+
+class TestPrepareResolvesItsOwnRange(_Run):
+    """prepare accepts what the user says, not what a previous command computed.
+
+    The skill used to resolve the dates elsewhere and hand prepare a --from/--to
+    it had already worked out. These hold that prepare does that itself, and —
+    more to the point — that it *reports* what it decided: a run that silently
+    picked seven days is a run nobody can check before it writes.
+    """
+
+    def test_shortcut_resolves_to_a_range_and_says_which(self):
+        d, rc, err = run_cli("analyze", "prepare", "7d", "--repo", _REPO,
+                             "--timezone", _TZ, "--today", "2026-07-17",
+                             env=self.env)
+        self.assertTrue(d["ok"], err)
+        self.assertEqual(rc, 0)
+        self.assertEqual(d["range"]["mode"], "days")
+        self.assertEqual(d["range"]["days_count"], 7)
+        self.assertEqual(d["range"]["from"], "2026-07-11")
+        self.assertEqual(d["range"]["to"], "2026-07-17")
+        self.assertEqual([t["date"] for t in d["tasks"]][0], "2026-07-11")
+        self.assertEqual(len(d["tasks"]), 7)
+
+    def test_days_flag_matches_the_shortcut(self):
+        a, _, _ = run_cli("analyze", "prepare", "3d", "--repo", _REPO,
+                          "--timezone", _TZ, "--today", "2026-07-17", env=self.env)
+        b, _, _ = run_cli("analyze", "prepare", "--days", "3", "--repo", _REPO,
+                          "--timezone", _TZ, "--today", "2026-07-17", env=self.env)
+        self.assertEqual([t["date"] for t in a["tasks"]],
+                         [t["date"] for t in b["tasks"]])
+
+    def test_single_date(self):
+        d, _, err = run_cli("analyze", "prepare", "--date", _DATE, "--repo", _REPO,
+                            "--timezone", _TZ, env=self.env)
+        self.assertTrue(d["ok"], err)
+        self.assertEqual(d["range"]["mode"], "date")
+        self.assertEqual([t["date"] for t in d["tasks"]], [_DATE])
+
+    def test_no_date_spec_refused(self):
+        d, rc, _ = run_cli("analyze", "prepare", "--repo", _REPO,
+                           "--timezone", _TZ, env=self.env)
+        self.assertFalse(d["ok"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(d["errors"][0]["code"], "NO_DATE_SPEC")
+
+    def test_two_modes_at_once_refused(self):
+        d, rc, _ = run_cli("analyze", "prepare", "--days", "3", "--date", _DATE,
+                           "--repo", _REPO, "--timezone", _TZ, env=self.env)
+        self.assertFalse(d["ok"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(d["errors"][0]["code"], "ARG_CONFLICT")
+
+    def test_range_over_the_cap_refused(self):
+        """The 30-day cap reaches prepare, which is the command that spawns the
+        per-day subagents the cap exists to bound. --from/--to used to slip past
+        it because prepare resolved dates itself and never knew about it.
+        """
+        d, rc, _ = run_cli("analyze", "prepare", "--from", "2026-01-01",
+                           "--to", "2026-03-31", "--repo", _REPO,
+                           "--timezone", _TZ, env=self.env)
+        self.assertFalse(d["ok"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(d["errors"][0]["code"], "TOO_MANY_DAYS")
+        self.assertEqual(d["errors"][0]["requested_days"], 90)
+
+    def test_timezone_is_detected_and_its_source_reported(self):
+        d, _, err = run_cli("analyze", "prepare", "--date", _DATE, "--repo", _REPO,
+                            env=dict(self.env, TZ="Asia/Taipei"))
+        self.assertTrue(d["ok"], err)
+        self.assertEqual(d["timezone"]["resolved"], "Asia/Taipei")
+        self.assertEqual(d["timezone"]["source"], "env:TZ")
+
+    def test_explicit_timezone_wins_and_says_so(self):
+        d, _, _ = run_cli("analyze", "prepare", "--date", _DATE, "--repo", _REPO,
+                          "--timezone", "UTC", env=dict(self.env, TZ="Asia/Taipei"))
+        self.assertEqual(d["timezone"]["resolved"], "UTC")
+        self.assertEqual(d["timezone"]["source"], "explicit")
+
+
+class TestPrepareResolvesItsOwnModel(_Run):
+    """--host asks the packaged config; the run reports which model it got."""
+
+    def test_host_resolves_the_configured_model(self):
+        d, _, err = run_cli("analyze", "prepare", "--date", _DATE, "--repo", _REPO,
+                            "--timezone", _TZ, "--host", "anthropic", env=self.env)
+        self.assertTrue(d["ok"], err)
+        self.assertEqual(d["provider"], "anthropic")
+        self.assertEqual(d["model"]["model_id"], "claude-haiku-4-5")
+        with open(d["tasks"][0]["manifest_path"], encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        self.assertEqual(manifest["model"]["model_id"], "claude-haiku-4-5")
+
+    def test_unknown_host_is_refused_not_guessed(self):
+        d, rc, _ = run_cli("analyze", "prepare", "--date", _DATE, "--repo", _REPO,
+                           "--timezone", _TZ, "--host", "acme", env=self.env)
+        self.assertFalse(d["ok"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(d["errors"][0]["code"], "UNKNOWN_HOST")
+
+    def test_model_override_beats_the_config(self):
+        d, _, err = run_cli("analyze", "prepare", "--date", _DATE, "--repo", _REPO,
+                            "--timezone", _TZ, "--host", "anthropic",
+                            "--model", "claude-opus-4-8", env=self.env)
+        self.assertTrue(d["ok"], err)
+        self.assertEqual(d["model"]["model_id"], "claude-opus-4-8")
+
+    def test_escalation_selects_the_escalation_model(self):
+        d, _, err = run_cli("analyze", "prepare", "--date", _DATE, "--repo", _REPO,
+                            "--timezone", _TZ, "--host", "anthropic",
+                            "--escalate", env=self.env)
+        self.assertTrue(d["ok"], err)
+        self.assertEqual(d["model"]["model_id"], "claude-sonnet-5")
+
+    def test_deprecated_env_var_warning_is_not_swallowed(self):
+        """The legacy variable is honoured, and prepare says so.
+
+        This warning is the entire reason the old name is still read: it changes
+        which model runs. Folding the resolver into prepare must not quietly drop
+        it on the floor -- that would honour the variable in silence, which is
+        the exact failure the warning exists to prevent.
+        """
+        d, _, err = run_cli("analyze", "prepare", "--date", _DATE, "--repo", _REPO,
+                            "--timezone", _TZ, "--host", "google",
+                            env=dict(self.env, REPO_WORKLOG_GOOGLE_MODEL="gemini-legacy"))
+        self.assertTrue(d["ok"], err)
+        self.assertEqual(d["model"]["model_id"], "gemini-legacy")
+        codes = [w["code"] for w in d.get("warnings", [])]
+        self.assertIn("DEPRECATED_ENV_VAR", codes)
+
+    def test_host_and_provider_together_refused(self):
+        d, rc, _ = run_cli("analyze", "prepare", "--date", _DATE, "--repo", _REPO,
+                           "--timezone", _TZ, "--host", "anthropic",
+                           "--provider", "openai", env=self.env)
+        self.assertFalse(d["ok"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(d["errors"][0]["code"], "ARG_CONFLICT")
+
+    def test_model_without_host_refused(self):
+        d, rc, _ = run_cli("analyze", "prepare", "--date", _DATE, "--repo", _REPO,
+                           "--timezone", _TZ, "--model", "some-model", env=self.env)
+        self.assertFalse(d["ok"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(d["errors"][0]["code"], "ARG_CONFLICT")
+
+    def test_provider_still_works_without_host(self):
+        """The stated form stays: a caller holding the model object has no host."""
+        d, _, err = run_cli("analyze", "prepare", "--date", _DATE, "--repo", _REPO,
+                            "--timezone", _TZ, "--provider", "openai",
+                            "--model-json", '{"display_name": "X", "model_id": "x-1"}',
+                            env=self.env)
+        self.assertTrue(d["ok"], err)
+        self.assertEqual(d["provider"], "openai")
+        self.assertEqual(d["model"]["model_id"], "x-1")
 
     def test_bad_language_refused_before_any_task_is_written(self):
         d, rc, _ = self.prepare("--language", "not a tag")

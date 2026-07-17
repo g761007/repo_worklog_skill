@@ -26,11 +26,10 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import date as date_cls, datetime, timedelta
 
 from git_worklog import dates as gwdates
 from git_worklog import language
-from git_worklog import markers as wm
+from git_worklog import providers
 from git_worklog.analysis import (
     PARTS_SUBDIR, RESULTS_SUBDIR, SCHEMA_VERSION, TASKS_SUBDIR, AnalysisError,
 )
@@ -40,41 +39,53 @@ from git_worklog.analysis import results as ar
 from git_worklog.analysis import worktree as aw
 
 
-def _date_range(start: str, end: str) -> "list[str]":
-    """Every calendar date in [start, end], inclusive at both ends."""
-    for value in (start, end):
-        if not wm.is_valid_date(value):
-            raise AnalysisError("INVALID_DATE",
-                                f"Not an ISO YYYY-MM-DD date: {value}.", date=value)
-    try:
-        first = date_cls.fromisoformat(start)
-        last = date_cls.fromisoformat(end)
-    except ValueError as exc:
-        raise AnalysisError("INVALID_DATE", f"Not a real calendar date: {exc}.")
-    if first > last:
-        raise AnalysisError("BAD_RANGE",
-                            f"--from {start} is after --to {end}.",
-                            **{"from": start, "to": end})
-    out = []
-    while first <= last:
-        out.append(first.isoformat())
-        first += timedelta(days=1)
-    return out
+def _resolve_model(args) -> "tuple[str, dict, list]":
+    """The provider and model for the whole run, plus any warnings to surface.
 
+    ``--host`` asks the resolver; ``--provider``/``--model-json`` state the answer
+    directly. Both stay: the skill knows its host, while a caller reconstructing a
+    previous run has the model object and no host to re-derive it from.
 
-def _zone(name: str):
-    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-    try:
-        return ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError):
-        raise AnalysisError("INVALID_TIMEZONE", f"Unknown IANA timezone: {name}.",
-                            timezone=name)
+    Returns ``(provider, model, warnings)``. The warnings are not decoration --
+    an honoured-but-deprecated env var is reported here or nowhere, and the whole
+    point of that warning is that a model must never change under the user in
+    silence.
+    """
+    if not args.host:
+        if args.model or args.escalate:
+            raise AnalysisError(
+                "ARG_CONFLICT",
+                "--model and --escalate select a model from the host's config, so "
+                "they need --host. With --provider, state the model in "
+                "--model-json instead.")
+        # Unstated provider keeps its historical default rather than becoming a
+        # None on the manifest.
+        return (args.provider or "anthropic"), am.parse_model(args.model_json), []
+    if args.provider or args.model_json:
+        raise AnalysisError(
+            "ARG_CONFLICT",
+            "--host resolves the provider and model; do not also pass "
+            "--provider / --model-json.")
+    resolved = providers.resolve(host=args.host, model=args.model,
+                                 escalate=args.escalate)
+    return resolved["provider"], resolved["model"], list(resolved.get("warnings", []))
 
 
 def _prepare(args) -> "tuple[dict, int]":
-    dates = _date_range(getattr(args, "from"), args.to)
-    tz = _zone(args.timezone)
-    model = am.parse_model(args.model_json)
+    # One date contract, not a second one written out here. dates.resolve()
+    # accepts every form the user can give (7d / --days / --date / --from+--to),
+    # validates them, and hands back each day's half-open window already
+    # computed -- so prepare cannot disagree with the rule about where a day
+    # starts, because it no longer states it.
+    date, days = gwdates.absorb_shortcut(args.shortcut, args.date, args.days)
+    resolved = gwdates.resolve(
+        date=date, days=days, from_=getattr(args, "from"), to=args.to,
+        timezone=args.timezone, today=args.today,
+    )
+    dates = [d["date"] for d in resolved["dates"]]
+    windows = {d["date"]: (d["start"], d["end"]) for d in resolved["dates"]}
+    tz_name = resolved["timezone"]
+    provider, model, model_warnings = _resolve_model(args)
 
     # Resolved once for the whole run, never per day: a manifest's resolved
     # language is what each day's result is checked against, and days that
@@ -95,22 +106,22 @@ def _prepare(args) -> "tuple[dict, int]":
     # when it was last written, not when the work happened, so there is nothing
     # to attribute a dirty worktree to on any past date. "Today" is read in the
     # run's timezone, which is the same clock that decides where a day starts.
-    today = datetime.now(tz).date().isoformat()
+    today = resolved["today"]
     worktree = aw.inspect(args.repo) if args.include_uncommitted else None
 
     tasks = []
     for date in dates:
-        start, end = gwdates.day_window(date, tz)
+        start, end = windows[date]
         history = ah.collect(
-            repo=args.repo, since=start.isoformat(), until=end.isoformat(),
+            repo=args.repo, since=start, until=end,
             date_field=args.date_field, worklog_dir=args.worklog_dir,
         )
         day_worktree = worktree if (worktree and date == today) else None
         result_path = os.path.join(results_dir, f"{date}.json")
         manifest = am.build(
-            date=date, timezone=args.timezone, history=history,
+            date=date, timezone=tz_name, history=history,
             worktree=day_worktree, include_uncommitted=bool(day_worktree),
-            provider=args.provider, model=model,
+            provider=provider, model=model,
             lang=lang, run_id=minted["run_id"], result_path=result_path,
             parts_dir=parts_dir,
         )
@@ -132,14 +143,24 @@ def _prepare(args) -> "tuple[dict, int]":
         "schema_version": SCHEMA_VERSION,
         "run_id": minted["run_id"],
         "run_dir": run_dir,
-        "repository": {"root": info["root"], "git_dir": info["git_dir"],
-                       "head": info["head"], "branch": info["branch"]},
+        # The whole of repo_info, not a chosen subset: this is the only place
+        # the caller learns the repository state now, and the previous
+        # `collect_git_history --info-only` step it replaces reported all of it.
+        "repository": info,
+        # What the date spec actually resolved to. Reported rather than assumed:
+        # the caller may have passed "7d" and is entitled to see which seven days
+        # that turned out to be, and in which zone, before any of it is written.
+        "range": {"mode": resolved["mode"], "from": dates[0], "to": dates[-1],
+                  "days_count": resolved["days_count"], "today": today},
+        "timezone": {"resolved": tz_name, "source": resolved["timezone_source"]},
+        "provider": provider,
+        "model": model,
         "language": lang.as_manifest(),
         "tasks": tasks,
     }
     if worktree:
         payload["worktree_fingerprint"] = worktree["worktree_fingerprint"]
-    warnings = list(lang.warnings)
+    warnings = list(lang.warnings) + model_warnings
     if worktree and today not in dates:
         # Asked for uncommitted work on a range that does not contain today, so
         # there is nowhere to put it. Silence here would read as "the worktree
@@ -198,10 +219,10 @@ def run(args) -> "tuple[dict, int]":
         if args.analyze_command == "prepare":
             return _prepare(args)
         return _collect(args)
-    except AnalysisError as exc:
-        return {"ok": False, "errors": [
-            {"code": exc.code, "message": exc.message, **exc.extra}]}, 2
-    except language.LanguageError as exc:
+    except (AnalysisError, gwdates.DateError, providers.ProviderError,
+            language.LanguageError) as exc:
+        # Four engines, one wire shape. They each carry their own code because
+        # the caller acts on the code, not on which module raised it.
         return {"ok": False, "errors": [
             {"code": exc.code, "message": exc.message, **exc.extra}]}, 2
     except ah.GitError as exc:
@@ -217,7 +238,13 @@ def render_text(p: dict) -> str:
     if "tasks" in p:
         lang = p["language"]
         lines.append(f"run {p['run_id']}  ({lang['resolved']}, via {lang['source']})\n")
-        lines.append(f"  {p['run_dir']}\n\n")
+        lines.append(f"  {p['run_dir']}\n")
+        rng, tz = p["range"], p["timezone"]
+        # A shortcut is only as good as the range it turned into, so say which
+        # days those were before listing them.
+        lines.append(f"  {rng['from']} .. {rng['to']}  ({rng['days_count']} day(s), "
+                     f"{tz['resolved']} via {tz['source']})\n")
+        lines.append(f"  model: {p['model']['model_id']}  ({p['provider']})\n\n")
         for t in p["tasks"]:
             note = "no changes" if not t["has_changes"] else (
                 f"{t['commit_count']} commit(s)"
