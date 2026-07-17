@@ -264,6 +264,80 @@ def _verify_against_tree(e: dict, at: str, tree: Tree) -> "list[dict]":
     return issues
 
 
+def mentioned_files(obj) -> "set[str]":
+    """Every file path the analysis refers to, anywhere in the result.
+
+    Both `files[]` lists and `evidence[].file` count. They do different jobs --
+    `files[]` inventories what a work item touched, `evidence[]` cites proof of
+    a specific claim -- and coverage asks the weaker question: was this file
+    accounted for at all?
+
+    The walk is deliberately structure-agnostic. The contract pins `files[]` only
+    on `work_items[]`, but leaves the shape of `fixes[]`, `refactors[]`,
+    `configuration_changes[]` and friends open, and a real run put `files[]` on
+    those too. Reading only the specified location would count an honestly
+    recorded config change as an omission.
+    """
+    found: "set[str]" = set()
+
+    def add(value):
+        if isinstance(value, str) and value.strip():
+            found.add(value.strip())
+        elif isinstance(value, dict) and value.get("path"):
+            found.add(str(value["path"]).strip())
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "files" and isinstance(value, list):
+                    for item in value:
+                        add(item)
+                elif key == "evidence" and isinstance(value, list):
+                    for e in value:
+                        if isinstance(e, dict) and e.get("file"):
+                            add(str(e["file"]))
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(obj)
+    return found
+
+
+def validate_coverage(obj, required: "set[str] | None") -> "list[dict]":
+    """Every source file the manifest required must be accounted for.
+
+    This is the other half of the evidence problem. #15 fixed *accuracy* -- a
+    citation now has to resolve against the tree it names. Accuracy says nothing
+    about *completeness*: a day can cite three real files perfectly and never
+    mention the other twenty it changed, and read as confident, verified work.
+
+    The bar is what measurement supports rather than what the roadmap's wording
+    suggests. Requiring every changed file to appear in `evidence[]` sounds
+    stricter and is: measured against a real, good run it would have rejected it
+    (31% cited). Measured the same way, this rule passes that run at 91% while
+    still naming the two files its analysis genuinely never reached.
+    """
+    if not required:
+        return []
+    missing = sorted(required - mentioned_files(obj))
+    if not missing:
+        return []
+    return [{
+        "code": "COVERAGE_INCOMPLETE",
+        "message": f"{len(missing)} source file(s) the day changed are not "
+                   f"mentioned anywhere in the analysis: "
+                   f"{', '.join(missing[:5])}"
+                   f"{f' (+{len(missing) - 5} more)' if len(missing) > 5 else ''}. "
+                   f"A file that was changed but never described may not have "
+                   f"been read.",
+        "missing_files": missing,
+        "required_count": len(required),
+        "covered_count": len(required) - len(missing),
+    }]
+
+
 def _validate_language(obj, expected: "str | None") -> "list[dict]":
     """Check the result's language field against the manifest's (§6.2.9).
 
@@ -297,14 +371,23 @@ def _validate_language(obj, expected: "str | None") -> "list[dict]":
 
 
 def validate(obj, date: str, expected_language: "str | None" = None,
-             tree: "Tree | None" = None) -> "list[dict]":
-    """Structural check against the §6 return schema. Returns issue dicts."""
+             tree: "Tree | None" = None,
+             required: "set[str] | None" = None) -> "list[dict]":
+    """Structural check against the §6 return schema. Returns issue dicts.
+
+    ``required`` is the manifest's required file set. It is optional because a
+    caller without a manifest genuinely cannot know it -- `collect_day_results.py`
+    is handed a run directory and nothing else, so it checks what it can and does
+    not pretend to check coverage. `analyze collect` reads the manifests, so it
+    can, and does.
+    """
     issues: "list[dict]" = []
     if not isinstance(obj, dict):
         return [{"code": "RESULT_NOT_OBJECT",
                  "message": "The result file must contain a JSON object."}]
 
     issues.extend(_validate_language(obj, expected_language))
+    issues.extend(validate_coverage(obj, required))
 
     missing = [k for k in REQUIRED_KEYS if k not in obj]
     if missing:
@@ -366,8 +449,13 @@ def validate(obj, date: str, expected_language: "str | None" = None,
 
 
 def read_run(run_dir: str, dates: "list[str]", repo: str,
-             expected_language: "str | None" = None) -> dict:
-    """Read every dispatched day's result file and validate it."""
+             expected_language: "str | None" = None,
+             required_by_date: "dict[str, set[str]] | None" = None) -> dict:
+    """Read every dispatched day's result file and validate it.
+
+    ``required_by_date`` maps a date to the source files its manifest requires
+    the analysis to account for. Omitted by callers that never saw a manifest.
+    """
     if not os.path.isdir(run_dir):
         raise AnalysisError("RUN_DIR_MISSING",
                             f"No such analysis run directory: {run_dir}.",
@@ -406,7 +494,8 @@ def read_run(run_dir: str, dates: "list[str]", repo: str,
                             "message": f"Could not read result file: {exc}"})
             continue
 
-        issues = validate(obj, date, expected_language, tree)
+        issues = validate(obj, date, expected_language, tree,
+                          (required_by_date or {}).get(date))
         if issues:
             invalid.append({"date": date, "path": path,
                             "code": issues[0]["code"],
