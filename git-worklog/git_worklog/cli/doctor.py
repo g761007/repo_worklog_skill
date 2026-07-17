@@ -6,10 +6,9 @@ failure names the thing that is wrong rather than the thing that broke later.
 something is worth knowing (a shallow clone limits history, a legacy layout
 needs migrating).
 
-The roadmap's §12.1 list includes language and index_language checks. Those are
-not implemented here because the language contract does not exist yet (PR 4) —
-they are reported as ``skipped`` rather than silently omitted, so this command
-never implies it checked more than it did.
+The roadmap's §12.1 list is covered in full, language and index_language
+included. A green check must never imply coverage it does not have, so anything
+this command cannot check says so rather than being silently omitted.
 """
 
 from __future__ import annotations
@@ -21,6 +20,7 @@ import shutil
 import subprocess
 import sys
 
+from git_worklog import config, language
 from git_worklog import markers as wm
 from git_worklog import paths
 
@@ -146,6 +146,65 @@ def _check_config(worklog_dir: str) -> dict:
     return _check("config", "ok", f"config.json: schema_version {got}.", value=got)
 
 
+def _check_language(worklog_dir: str) -> dict:
+    """Whether config's language setting is one this build can honour.
+
+    A bad tag here is worth surfacing now rather than at the point a run dies
+    on it: config.json is edited by hand, and the failure it causes otherwise
+    appears in the middle of an analysis with the diff already collected.
+    """
+    cfg = config.load(worklog_dir)
+    raw = cfg.get("language")
+    if raw is None:
+        return _check("language", "ok",
+                      "No language set; it resolves per run.", value=None)
+    if isinstance(raw, str) and raw.strip().lower() == language.AUTO:
+        return _check("language", "ok",
+                      "language: auto — resolved per run from the request, the "
+                      "environment or English.", value="auto")
+    try:
+        tag = language.normalize(raw)
+    except language.LanguageError as exc:
+        return _check("language", "fail",
+                      f"config.json language: {exc.message}", value=raw)
+    return _check("language", "ok", f"language: {tag}.", value=tag)
+
+
+def _check_index_language(worklog_dir: str) -> dict:
+    """What the index is written in, and whether that is pinned or inherited."""
+    cfg = config.load(worklog_dir)
+    raw = cfg.get("index_language")
+    pinned = None
+    if isinstance(raw, str) and raw.strip() and raw.strip().lower() != language.AUTO:
+        try:
+            pinned = language.normalize(raw)
+        except language.LanguageError as exc:
+            return _check("index_language", "fail",
+                          f"config.json index_language: {exc.message}", value=raw)
+
+    index_path = wm.index_path(worklog_dir)
+    stamped = None
+    if os.path.exists(index_path):
+        try:
+            with open(index_path, "r", encoding="utf-8") as fh:
+                stamped = wm.index_language_of(fh.read())
+        except (OSError, UnicodeDecodeError):
+            stamped = None  # the index's own check owns reporting this
+
+    if pinned:
+        detail = f"index_language: {pinned} (pinned by config)."
+        if stamped and stamped != pinned:
+            detail += (f" The index on disk is {stamped} and will be rebuilt in "
+                       f"{pinned}.")
+        return _check("index_language", "ok", detail, value=pinned)
+    if stamped:
+        return _check("index_language", "ok",
+                      f"index_language: {stamped} (fixed when the index was "
+                      f"first built).", value=stamped)
+    return _check("index_language", "ok",
+                  "index_language: auto — the first build decides.", value="auto")
+
+
 def _check_version_file(worklog_dir: str) -> dict:
     path = wm.version_path(worklog_dir)
     if not os.path.exists(path):
@@ -224,12 +283,8 @@ def run(args) -> "tuple[dict, int]":
     checks.append(_check_state_dir())
     checks.append(_check_legacy_state_dir())
     checks.append(_check_skill_compat())
-    checks.append(_check("language", "skipped",
-                         "The language contract does not exist yet (PR 4); nothing "
-                         "to check."))
-    checks.append(_check("index_language", "skipped",
-                         "The language contract does not exist yet (PR 4); nothing "
-                         "to check."))
+    checks.append(_check_language(worklog_dir))
+    checks.append(_check_index_language(worklog_dir))
 
     failed = [c for c in checks if c["status"] == "fail"]
     warned = [c for c in checks if c["status"] == "warn"]

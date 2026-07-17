@@ -25,7 +25,7 @@ def _evidence(**overrides) -> dict:
 
 def _valid_result(date: str, **overrides) -> dict:
     obj = {
-        "date": date, "timezone": "Asia/Taipei",
+        "date": date, "timezone": "Asia/Taipei", "language": "zh-TW",
         "status": "complete", "confidence": "verified",
         "escalation_recommended": False, "escalation_reasons": [],
         "has_changes": True,
@@ -285,6 +285,111 @@ class TestRead(unittest.TestCase):
         self.assertFalse(d["ok"])
         self.assertEqual(rc, 2)
         self.assertEqual(d["errors"][0]["code"], "RUN_DIR_MISSING")
+
+
+class TestResultLanguage(unittest.TestCase):
+    """The language half of the result contract (§6.2.9)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="rw_run_")
+
+    def tearDown(self):
+        rmtree(self.tmp)
+
+    def _write(self, date, payload):
+        with open(os.path.join(self.tmp, f"{date}.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False)
+
+    def _read(self, dates="2026-07-15", language=None):
+        args = ["read", "--run-dir", self.tmp, "--dates", dates]
+        if language:
+            args += ["--language", language]
+        d, _, err = run_script("collect_day_results.py", args)
+        self.assertIsNotNone(d, err)
+        return d
+
+    def test_result_without_a_language_is_rejected(self):
+        obj = _valid_result("2026-07-15")
+        del obj["language"]
+        self._write("2026-07-15", obj)
+        d = self._read()
+        self.assertEqual(d["invalid"][0]["code"], "RESULT_SCHEMA_INVALID")
+        self.assertIn("language", d["invalid"][0]["issues"][0]["missing_keys"])
+
+    def test_result_language_must_be_a_real_tag(self):
+        self._write("2026-07-15", _valid_result("2026-07-15", language="chinese"))
+        d = self._read()
+        self.assertEqual(d["invalid"][0]["code"], "RESULT_BAD_LANGUAGE")
+
+    def test_result_language_must_match_the_manifest(self):
+        # The subagent was told zh-TW and answered in English. Accepting it
+        # would put an English day inside a Traditional Chinese worklog.
+        self._write("2026-07-15", _valid_result("2026-07-15", language="en"))
+        d = self._read(language="zh-TW")
+        self.assertEqual(d["invalid"][0]["code"], "RESULT_LANGUAGE_MISMATCH")
+        self.assertTrue(d["partial_run"])
+        self.assertEqual(d["results"], {})
+
+    def test_matching_language_passes(self):
+        self._write("2026-07-15", _valid_result("2026-07-15", language="zh-TW"))
+        d = self._read(language="zh-TW")
+        self.assertEqual(d["complete"], ["2026-07-15"])
+        self.assertEqual(d["language"], "zh-TW")
+        self.assertFalse(d["language_inconsistent"])
+
+    def test_casing_difference_is_not_a_language_difference(self):
+        self._write("2026-07-15", _valid_result("2026-07-15", language="zh-tw"))
+        d = self._read(language="zh-TW")
+        self.assertEqual(d["complete"], ["2026-07-15"])
+
+    def test_zh_tw_result_does_not_satisfy_a_zh_cn_manifest(self):
+        # §21.4: these are different languages, and treating them as one would
+        # ship Traditional text to a Simplified reader.
+        self._write("2026-07-15", _valid_result("2026-07-15", language="zh-TW"))
+        d = self._read(language="zh-CN")
+        self.assertEqual(d["invalid"][0]["code"], "RESULT_LANGUAGE_MISMATCH")
+
+    def test_mixed_languages_across_days_make_the_run_partial(self):
+        # §21.4: no manifest language was passed, so nothing checked the days
+        # individually -- but a worklog whose days switch language mid-run must
+        # not reach apply.
+        self._write("2026-07-15", _valid_result("2026-07-15", language="zh-TW"))
+        self._write("2026-07-16", _valid_result("2026-07-16", language="en"))
+        d = self._read("2026-07-15,2026-07-16")
+        self.assertTrue(d["language_inconsistent"])
+        self.assertTrue(d["partial_run"])
+        self.assertEqual(d["languages_seen"], ["en", "zh-TW"])
+        self.assertIsNone(d["language"])
+
+    def test_consistent_days_report_the_runs_language(self):
+        self._write("2026-07-15", _valid_result("2026-07-15", language="ja"))
+        self._write("2026-07-16", _valid_result("2026-07-16", language="ja"))
+        d = self._read("2026-07-15,2026-07-16")
+        self.assertEqual(d["language"], "ja")
+        self.assertFalse(d["language_inconsistent"])
+        self.assertFalse(d["partial_run"])
+
+    def test_collect_rejects_an_unusable_expected_language_outright(self):
+        self._write("2026-07-15", _valid_result("2026-07-15"))
+        d, _, err = run_script("collect_day_results.py",
+                               ["read", "--run-dir", self.tmp,
+                                "--dates", "2026-07-15", "--language", "zh"])
+        self.assertIsNotNone(d, err)
+        self.assertFalse(d["ok"])
+        self.assertEqual(d["errors"][0]["code"], "LANGUAGE_AMBIGUOUS")
+
+    def test_english_identifiers_in_zh_tw_prose_are_not_a_language_error(self):
+        # The reason validation is structural: correct zh-TW engineering prose
+        # is full of English paths and symbols by contract. A detector would
+        # flag this; the contract must not.
+        obj = _valid_result("2026-07-15", language="zh-TW")
+        obj["work_items"][0]["summary"] = (
+            "重構 src/auth/token_manager.py 的 refresh_token()，"
+            "避免 TokenRefreshError 在 retry 時被吞掉。")
+        self._write("2026-07-15", obj)
+        d = self._read(language="zh-TW")
+        self.assertEqual(d["complete"], ["2026-07-15"])
 
 
 class TestInitReadRoundTrip(unittest.TestCase):

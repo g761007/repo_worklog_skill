@@ -46,18 +46,18 @@ from datetime import datetime
 import _bootstrap  # noqa: F401 — must precede any git_worklog import
 import worklog_markers as wm  # noqa: F401
 
-from git_worklog import paths
+from git_worklog import language, paths
 
 ANALYSIS_DIR = paths.analysis_dir()
 
 # Top-level keys required by the Day Subagent return schema
 # (references/subagent-contract.md §6). All must be present even when empty.
 REQUIRED_KEYS = [
-    "date", "timezone", "status", "confidence", "escalation_recommended",
-    "escalation_reasons", "has_changes", "commits", "work_items", "fixes",
-    "refactors", "tests", "database_changes", "configuration_changes",
-    "deployment_changes", "uncommitted_changes", "handoff_notes",
-    "uncertainties", "evidence",
+    "date", "timezone", "language", "status", "confidence",
+    "escalation_recommended", "escalation_reasons", "has_changes", "commits",
+    "work_items", "fixes", "refactors", "tests", "database_changes",
+    "configuration_changes", "deployment_changes", "uncommitted_changes",
+    "handoff_notes", "uncertainties", "evidence",
 ]
 
 # Keys required on each work_items[] entry (§6).
@@ -153,12 +153,46 @@ def _validate_evidence(entries, where: str) -> list[dict]:
     return issues
 
 
-def _validate(obj, date: str) -> list[dict]:
+def _validate_language(obj, expected: "str | None") -> list[dict]:
+    """Check the result's language field against the manifest's (§6.2.9).
+
+    Structural only, on purpose. The roadmap is explicit that a natural-language
+    detector must not decide this: engineering prose is full of English
+    identifiers, paths and API names by contract, so a detector reading a
+    correct zh-TW work item would see enough English to doubt it. What is
+    checkable is that the subagent declared a language, that the tag is
+    well-formed, and that it is the one it was asked for.
+    """
+    issues: list[dict] = []
+    raw = obj.get("language")
+    if raw is None:
+        return issues  # absence is already reported by the required-keys check
+
+    try:
+        tag = language.normalize(raw)
+    except language.LanguageError as exc:
+        return [{"code": "RESULT_BAD_LANGUAGE", "message": exc.message,
+                 "language": raw}]
+
+    if expected is not None and tag != expected:
+        issues.append({
+            "code": "RESULT_LANGUAGE_MISMATCH",
+            "message": f"Result is in {tag!r} but the manifest asked for "
+                       f"{expected!r}.",
+            "language": tag,
+            "expected_language": expected,
+        })
+    return issues
+
+
+def _validate(obj, date: str, expected_language: "str | None" = None) -> list[dict]:
     """Structural check against the §6 return schema. Returns issue dicts."""
     issues: list[dict] = []
     if not isinstance(obj, dict):
         return [{"code": "RESULT_NOT_OBJECT",
                  "message": "The result file must contain a JSON object."}]
+
+    issues.extend(_validate_language(obj, expected_language))
 
     missing = [k for k in REQUIRED_KEYS if k not in obj]
     if missing:
@@ -226,6 +260,13 @@ def cmd_read(args: argparse.Namespace) -> int:
         _fail("RUN_DIR_MISSING", f"No such analysis run directory: {run_dir}.",
               run_dir=run_dir)
 
+    expected_language = None
+    if args.language:
+        try:
+            expected_language = language.normalize(args.language)
+        except language.LanguageError as exc:
+            _fail(exc.code, exc.message, **exc.extra)
+
     results: dict[str, dict] = {}
     missing: list[str] = []
     invalid: list[dict] = []
@@ -251,7 +292,7 @@ def cmd_read(args: argparse.Namespace) -> int:
                             "message": f"Could not read result file: {exc}"})
             continue
 
-        issues = _validate(obj, date)
+        issues = _validate(obj, date, expected_language)
         if issues:
             invalid.append({"date": date, "path": path,
                             "code": issues[0]["code"],
@@ -259,6 +300,16 @@ def cmd_read(args: argparse.Namespace) -> int:
                             "issues": issues})
             continue
         results[date] = obj
+
+    # Every day in a run must be written in one language (§6.2.8). When the
+    # manifest's language was passed in, each day was already checked against
+    # it, so this can only fire for a run collected without one -- but it fires
+    # then, because a worklog whose days silently switch language mid-run is not
+    # something to discover after apply.
+    languages = sorted({results[d]["language"] for d in results
+                        if isinstance(results[d].get("language"), str)})
+    run_language = languages[0] if len(languages) == 1 else None
+    language_inconsistent = len(languages) > 1
 
     complete = [d for d in dates if d in results
                 and results[d].get("status") == "complete"]
@@ -271,6 +322,9 @@ def cmd_read(args: argparse.Namespace) -> int:
         "ok": True,
         "run_dir": run_dir,
         "dates": dates,
+        "language": run_language,
+        "language_inconsistent": language_inconsistent,
+        "languages_seen": languages,
         "results": results,
         "complete": complete,
         "degraded": degraded,
@@ -279,8 +333,11 @@ def cmd_read(args: argparse.Namespace) -> int:
         "failed_dates": failed_dates,
         # A run is partial if any day failed to arrive, arrived malformed, or
         # reported its own status as partial/failed. Apply is blocked by default
-        # for a partial run (subagent-contract.md §11).
-        "partial_run": bool(failed_dates or degraded),
+        # for a partial run (subagent-contract.md §11) -- which is also the lever
+        # that stops a mixed-language run from reaching the worklog, since a day
+        # in the wrong language is wrong in a way no amount of retrying the
+        # other days fixes.
+        "partial_run": bool(failed_dates or degraded or language_inconsistent),
         "escalation_suggested_dates": [
             d for d in dates
             if d in results and results[d].get("escalation_recommended")
@@ -302,6 +359,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "~/.git-worklog/analysis/<run_id>).")
 
     r = sub.add_parser("read", help="Read and validate the run's result files.")
+    r.add_argument("--language", default=None,
+                   help="The manifest's resolved language. Each result must "
+                        "declare this exact tag; omit only when collecting a "
+                        "run whose manifest language is unknown.")
     r.add_argument("--run-dir", required=True, help="The run directory from init.")
     r.add_argument("--dates", required=True,
                    help="Comma-separated ISO dates that were dispatched.")

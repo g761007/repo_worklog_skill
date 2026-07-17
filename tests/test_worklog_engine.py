@@ -99,6 +99,67 @@ class TestMarkers(unittest.TestCase):
         self.assertLessEqual(len(out), wm.SUMMARY_MAX_CHARS)
         self.assertNotIn("| ", out.replace("\\|", ""))  # raw pipes escaped
 
+    def test_marked_summary_is_found_whatever_language_the_day_is_in(self):
+        # The reason the marker exists. Keying off the zh-TW heading meant an
+        # English day produced a blank index row — no error, no warning, just a
+        # missing summary — the moment the language contract let days be
+        # written in anything but Traditional Chinese.
+        gen = ("## Daily summary\n"
+               f"{wm.render_summary('Reworked the token refresh path.')}"
+               "\n## Work items\n")
+        self.assertEqual(wm.summarise_generated(gen),
+                         "Reworked the token refresh path.")
+
+    def test_unmarked_english_day_yields_no_summary(self):
+        # The honest limit of the zh-TW fallback: it can only find a summary in
+        # the language it was hardcoded for. Days written in another language
+        # must carry the marker, which is why the contract requires it.
+        gen = "## Daily summary\n\nReworked the token refresh path.\n"
+        self.assertEqual(wm.summarise_generated(gen), "")
+
+    def test_marker_wins_over_the_legacy_heading(self):
+        gen = ("## 當日摘要\n"
+               f"{wm.render_summary('來自 marker 的摘要。')}"
+               "\n這行不該被當成摘要。\n")
+        self.assertEqual(wm.summarise_generated(gen), "來自 marker 的摘要。")
+
+    def test_marker_cannot_be_hijacked_by_a_participants_line(self):
+        # The ordering that hijacked the index under heading-scanning is inert
+        # once the summary is bracketed: 參與者 sits outside the markers.
+        gen = ("## 當日摘要\n"
+               f"{wm.render_summary('新增會員搜尋快取。')}"
+               "參與者：Alice Chen\n\n## 主要異動\n")
+        self.assertEqual(wm.summarise_generated(gen), "新增會員搜尋快取。")
+
+    def test_unclosed_marker_falls_back_rather_than_blanking_the_row(self):
+        gen = (f"## 當日摘要\n<!-- {wm.PREFIX}:SUMMARY:START -->\n"
+               "標記內的摘要。\n")
+        # START with no END still yields its content: the row is right either way.
+        self.assertEqual(wm.summarise_generated(gen), "標記內的摘要。")
+
+    def test_empty_marker_pair_falls_back_to_the_heading(self):
+        # A day whose markers came out empty still has a summary under the
+        # heading; blanking the row would lose information we hold.
+        gen = (f"## 當日摘要\n<!-- {wm.PREFIX}:SUMMARY:START -->\n"
+               f"<!-- {wm.PREFIX}:SUMMARY:END -->\n\n實際的摘要在這裡。\n")
+        self.assertEqual(wm.summarise_generated(gen), "實際的摘要在這裡。")
+
+    def test_legacy_prefix_summary_marker_still_parses(self):
+        gen = (f"## 當日摘要\n<!-- {wm.LEGACY_PREFIX}:SUMMARY:START -->\n"
+               f"舊前綴的摘要。\n<!-- {wm.LEGACY_PREFIX}:SUMMARY:END -->\n")
+        self.assertEqual(wm.summarise_generated(gen), "舊前綴的摘要。")
+
+    def test_marked_summary_is_escaped_and_capped_like_any_other(self):
+        gen = wm.render_summary("A|B " * 40)
+        out = wm.summarise_generated(gen)
+        self.assertLessEqual(len(out), wm.SUMMARY_MAX_CHARS)
+        self.assertNotIn("| ", out.replace("\\|", ""))
+
+    def test_summary_markers_are_allowed_inside_generated_content(self):
+        # They nest inside a region rather than delimiting one. Rejecting them
+        # would refuse every day the contract asks for.
+        self.assertFalse(wm.contains_marker_line(wm.render_summary("摘要。")))
+
     def test_index_roundtrip_and_order(self):
         rows = [("2026-07-15", "a"), ("2026-07-14", "b")]
         idx = wm.render_index(rows)
@@ -258,6 +319,176 @@ class TestUpdateDaily(unittest.TestCase):
         self.assertEqual([f for f in os.listdir(day_dir) if f.startswith(".rw-")], [])
 
 
+class TestLanguageOnDisk(unittest.TestCase):
+    """§21.4: MANUAL survives a language switch; non-ASCII survives the round trip."""
+
+    def setUp(self):
+        self.work = tempfile.mkdtemp(prefix="rw_lod_")
+        self.dir = os.path.join(self.work, wm.WORKLOG_DIRNAME)
+
+    def tearDown(self):
+        rmtree(self.work)
+
+    def _write_day(self, date, generated):
+        run_script("update_daily_worklog.py", ["--dir", self.dir, "--apply"],
+                   stdin=day_entries({date: generated}))
+
+    def test_manual_region_is_untouched_when_the_generated_language_changes(self):
+        # §6.2.11: MANUAL is preserved verbatim, never translated or rewritten.
+        # The user's own words are theirs, whatever language the run is in.
+        self._write_day("2026-07-15",
+                        "## 當日摘要\n" + wm.render_summary("第一版摘要。"))
+        path = day_file(self.dir, "2026-07-15")
+        note = "我手寫的筆記：這天的 workaround 別移除，見 issue #42。\nAlice said: keep it.\n"
+        raw = read(path).replace(marker("2026-07-15", "MANUAL", "START") + "\n",
+                                 marker("2026-07-15", "MANUAL", "START") + "\n" + note)
+        write(path, raw)
+
+        self._write_day("2026-07-15",
+                        "## Daily summary\n" + wm.render_summary("Rewritten in English."))
+
+        day = wm.parse_day(read(path), "2026-07-15")
+        self.assertIn("我手寫的筆記：這天的 workaround 別移除，見 issue #42。", day.manual)
+        self.assertIn("Alice said: keep it.", day.manual)
+        self.assertIn("Rewritten in English.", day.generated)
+        self.assertNotIn("第一版摘要。", day.generated)
+
+    def test_non_ascii_content_round_trips_byte_for_byte(self):
+        # §21.4: UTF-8 write and read back. Every language this tool claims to
+        # support is non-ASCII except English, so a mangled encoding would be a
+        # silent corruption of the whole product.
+        samples = {
+            "2026-07-15": "重構了「權限判斷」流程，並補上邊界測試。",
+            "2026-07-16": "認証フローをリファクタリングし、境界テストを追加した。",
+            "2026-07-17": "인증 흐름을 리팩터링하고 경계 테스트를 추가했다.",
+            "2026-07-18": "Überprüfung der Token-Logik — jetzt läuft's.",
+        }
+        for date, text in samples.items():
+            self._write_day(date, f"## 摘要\n{wm.render_summary(text)}")
+
+        for date, text in samples.items():
+            day = wm.parse_day(read(day_file(self.dir, date)), date)
+            self.assertIn(text, day.generated)
+            self.assertEqual(wm.summarise_generated(day.generated), text)
+
+    def test_non_ascii_summaries_survive_into_the_index(self):
+        samples = {
+            "2026-07-16": "認証フローをリファクタリングした。",
+            "2026-07-17": "인증 흐름을 리팩터링했다.",
+        }
+        for date, text in samples.items():
+            self._write_day(date, f"## 摘要\n{wm.render_summary(text)}")
+        run_script("rebuild_worklog_index.py",
+                   ["--dir", self.dir, "--language", "ja", "--apply"], stdin="")
+        index = read(wm.index_path(self.dir))
+        for text in samples.values():
+            self.assertIn(text, index)
+
+
+class TestIndexLanguage(unittest.TestCase):
+    """§6.2.12: the index picks a language once and then keeps it."""
+
+    def setUp(self):
+        self.work = tempfile.mkdtemp(prefix="rw_idxlang_")
+        self.dir = os.path.join(self.work, wm.WORKLOG_DIRNAME)
+        run_script("update_daily_worklog.py", ["--dir", self.dir, "--apply"],
+                   stdin=day_entries({"2026-07-15": "## 當日摘要\n\nnewest"}))
+
+    def tearDown(self):
+        rmtree(self.work)
+
+    def _rebuild(self, language=None):
+        args = ["--dir", self.dir, "--apply"]
+        if language:
+            args += ["--language", language]
+        d, _, err = run_script("rebuild_worklog_index.py", args, stdin="")
+        self.assertIsNotNone(d, err)
+        return d
+
+    def _index(self):
+        with open(wm.index_path(self.dir), encoding="utf-8") as fh:
+            return fh.read()
+
+    def _write_config(self, **keys):
+        os.makedirs(self.dir, exist_ok=True)
+        with open(wm.config_path(self.dir), "w", encoding="utf-8") as fh:
+            json.dump({"schema_version": 1, **keys}, fh)
+
+    def test_first_build_stamps_the_runs_language(self):
+        d = self._rebuild("en")
+        self.assertEqual(d["index_language"], "en")
+        self.assertEqual(d["index_language_source"], "run")
+        self.assertEqual(wm.index_language_of(self._index()), "en")
+        self.assertIn("| Date | Summary |", self._index())
+
+    def test_a_later_run_in_another_language_does_not_rewrite_the_index(self):
+        # The churn §6.2.12 exists to prevent: a zh-TW developer and an English
+        # one must not flip the headings back and forth in every diff.
+        self._rebuild("en")
+        first = self._index()
+        d = self._rebuild("zh-TW")
+        self.assertEqual(d["index_language"], "en")
+        self.assertEqual(d["index_language_source"], "existing-index")
+        self.assertEqual(d["action"], "no_change")
+        self.assertEqual(self._index(), first)
+
+    def test_config_pin_outranks_the_run_and_the_existing_stamp(self):
+        self._rebuild("en")
+        self._write_config(index_language="zh-TW")
+        d = self._rebuild("en")
+        self.assertEqual(d["index_language"], "zh-TW")
+        self.assertEqual(d["index_language_source"], "project-config")
+        self.assertIn("| 日期 | 摘要 |", self._index())
+
+    def test_config_auto_is_not_a_pin(self):
+        # "auto" ships in every config.json and means nobody decided.
+        self._write_config(index_language="auto")
+        d = self._rebuild("ja")
+        self.assertEqual(d["index_language"], "ja")
+        self.assertEqual(d["index_language_source"], "run")
+
+    def test_an_existing_unstamped_index_stays_traditional_chinese(self):
+        self._rebuild("zh-TW")
+        # Every index written before this contract is zh-TW and carries no
+        # stamp. Reading "no stamp" as "undecided" would retitle all of them on
+        # upgrade -- a rewrite nobody asked for, in a committed file.
+        raw = self._index().replace(f"INDEX:GENERATED:START lang=zh-TW",
+                                    "INDEX:GENERATED:START")
+        with open(wm.index_path(self.dir), "w", encoding="utf-8") as fh:
+            fh.write(raw)
+        d = self._rebuild("en")
+        self.assertEqual(d["index_language"], "zh-TW")
+        self.assertEqual(d["index_language_source"], "existing-index-unstamped")
+        self.assertIn("| 日期 | 摘要 |", self._index())
+
+    def test_an_unstamped_index_still_parses(self):
+        self._rebuild("zh-TW")
+        raw = self._index().replace("INDEX:GENERATED:START lang=zh-TW",
+                                    "INDEX:GENERATED:START")
+        doc = wm.parse_index(raw)
+        self.assertTrue(doc.rows)
+        self.assertIsNone(wm.index_language_of(raw))
+
+    def test_a_language_without_chrome_gets_english_furniture(self):
+        # Honest degradation: day summaries stay in their own language, and the
+        # furniture around them falls back rather than being machine-translated
+        # into something nobody here can proofread.
+        d = self._rebuild("ko")
+        self.assertEqual(d["index_language"], "ko")
+        self.assertIn("| Date | Summary |", self._index())
+        self.assertEqual(wm.index_language_of(self._index()), "ko")
+
+    def test_manual_region_survives_a_language_pin(self):
+        self._rebuild("en")
+        raw = self._index().replace(
+            "Add anything worth knowing", "我自己寫的說明，不要動它。Add anything")
+        with open(wm.index_path(self.dir), "w", encoding="utf-8") as fh:
+            fh.write(raw)
+        self._write_config(index_language="zh-TW")
+        self._rebuild()
+        self.assertIn("我自己寫的說明，不要動它。", self._index())
+
+
 class TestRebuildIndex(unittest.TestCase):
     def setUp(self):
         self.work = tempfile.mkdtemp(prefix="rw_idx_")
@@ -399,6 +630,37 @@ class TestPreviewState(unittest.TestCase):
     def test_consistent_when_unchanged(self):
         d, rc, _ = self._verify(self.fp["worklog"])
         self.assertTrue(d["consistent"])
+        self.assertEqual(rc, 0)
+
+    def test_switching_language_after_the_dry_run_blocks_apply(self):
+        # §6.2.10: a user who confirmed a zh-TW preview and then asked for
+        # English is asking for a different worklog. Apply must refuse and force
+        # a fresh preview rather than write prose nobody previewed.
+        pid = self._create()
+        state = {"repository": self.fp["repository"],
+                 "worklog": self.fp["worklog"],
+                 "params": {**self.fp["params"], "language": "en"}}
+        d, rc, _ = run_script("preview_state.py",
+                              ["verify", "--id", pid,
+                               "--now", "2026-07-15T12:05:00+08:00"],
+                              stdin=json.dumps(state), env=self.env)
+        self.assertFalse(d["consistent"])
+        self.assertEqual(rc, 3)
+        self.assertEqual([m["field"] for m in d["mismatches"]], ["language"])
+        self.assertEqual(d["reason"], "state changed since dry-run")
+
+    def test_same_language_applies_cleanly(self):
+        self.fp["params"]["language"] = "zh-TW"
+        pid = self._create()
+        state = {"repository": self.fp["repository"],
+                 "worklog": self.fp["worklog"],
+                 "params": {"timezone": "Asia/Taipei",
+                            "include_uncommitted": False, "language": "zh-TW"}}
+        d, rc, _ = run_script("preview_state.py",
+                              ["verify", "--id", pid,
+                               "--now", "2026-07-15T12:05:00+08:00"],
+                              stdin=json.dumps(state), env=self.env)
+        self.assertTrue(d["consistent"], d.get("mismatches"))
         self.assertEqual(rc, 0)
 
     def test_changed_day_file_blocks(self):

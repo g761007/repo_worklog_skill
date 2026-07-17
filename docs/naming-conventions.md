@@ -105,7 +105,7 @@ where it would corrupt a file) but is never written.
 | --- | --- |
 | State directory | `GIT_WORKLOG_HOME` — Active (new in v0.7; there was never a `REPO_WORKLOG_HOME`) |
 | Model overrides | `GIT_WORKLOG_{ANTHROPIC,OPENAI,GOOGLE}_MODEL` — Active |
-| Output language | `GIT_WORKLOG_LANGUAGE` — Planned (PR 4) |
+| Output language | `GIT_WORKLOG_LANGUAGE` — Active (new in v0.8; there was never a `REPO_WORKLOG_LANGUAGE`) |
 
 `SCREAMING_SNAKE_CASE`, always prefixed `GIT_WORKLOG_`.
 

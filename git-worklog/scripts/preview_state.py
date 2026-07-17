@@ -60,6 +60,12 @@ _CONSISTENCY_KEYS = [
     ("worklog", "dir_fingerprint", "worklog directory listing"),
     ("params", "timezone", "timezone"),
     ("params", "include_uncommitted", "include_uncommitted"),
+    # §6.2.10: apply must not re-decide the language. A user who confirmed a
+    # zh-TW preview and then asked for English is asking for a different
+    # worklog, not the same one rendered differently -- so the preview goes
+    # stale and a new one gets built and confirmed, rather than apply quietly
+    # writing something nobody previewed.
+    ("params", "language", "language"),
 ]
 
 

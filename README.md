@@ -192,6 +192,15 @@ the old file, and refuses if the legacy markers are corrupt.
   (`update_daily_worklog.py --dir` / `rebuild_worklog_index.py --dir` to override).
 - **Timezone:** auto-detected (`$TZ` → `/etc/localtime` → offset); override with
   `resolve_date_range.py --timezone Asia/Taipei`.
+- **Output language:** the worklog is written in the language you are asking in,
+  not the language the repository is in. English commits, English identifiers and
+  an English README do not make an English worklog. Priority: what you asked for
+  → `--language` → `.git-worklog/config.json` → the agent host →
+  `GIT_WORKLOG_LANGUAGE` → system locale → English. Tags are BCP 47 (`zh-TW`,
+  `en`, `ja`); bare `zh` is refused as ambiguous, and `zh-TW`/`zh-CN` are never
+  treated as the same setting. Paths, code symbols, commit hashes and API names
+  are never translated in any language. `index.md` fixes its language on first
+  build so it does not churn between contributors. See roadmap §6.2.
 - **Subagent models:** defined once in `git-worklog/config/provider_models.json`
   (cost-first defaults — Claude Haiku 4.5 / GPT-5.6 Luna / Gemini 3.5 Flash) and
   resolved per host by `resolve_provider_model.py`. Override with
@@ -423,6 +432,13 @@ skill 會明講並詢問是否先補齊——**絕不默默降級成摘要 commi
   `update_daily_worklog.py --dir` ／ `rebuild_worklog_index.py --dir` 覆寫）。
 - **時區**：自動偵測（`$TZ` → `/etc/localtime` → 系統偏移）；可用
   `resolve_date_range.py --timezone Asia/Taipei` 指定。
+- **輸出語言**：日誌用「你提問的語言」寫，不是用「repo 的語言」寫。commit 訊息、識別符、
+  README 全是英文，也不會讓日誌變成英文。優先序：本次要求 → `--language` →
+  `.git-worklog/config.json` → Agent Host → `GIT_WORKLOG_LANGUAGE` → 系統 locale
+  → 英文。語言標籤採 BCP 47（`zh-TW`、`en`、`ja`）；單獨的 `zh` 因語意模糊會被拒絕，
+  `zh-TW` 與 `zh-CN` 永不視為同一設定。任何語言下，檔案路徑、程式符號、commit hash
+  與 API 名稱都不翻譯。`index.md` 於首次建立時固定語言，避免不同貢獻者反覆改寫。
+  詳見 roadmap §6.2。
 - **Subagent 模型**：於 `git-worklog/config/provider_models.json` 統一設定
   （成本優先預設——Claude Haiku 4.5 ／ GPT-5.6 Luna ／ Gemini 3.5 Flash），由
   `resolve_provider_model.py` 依宿主解析；可用

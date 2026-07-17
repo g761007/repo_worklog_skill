@@ -8,6 +8,70 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A BCP 47 language contract (roadmap §6.2).** The worklog is written in the
+  language you are asking in, not the language the repository happens to be in.
+  A repo full of English commit messages, English identifiers and an English
+  README still produces a `zh-TW` worklog for a `zh-TW` conversation — source
+  data never votes on output language.
+
+  `--language` and `--language-source` on `build_analysis_manifest.py`, plus
+  `language` and `index_language` in `.git-worklog/config.json` (both shipped as
+  `auto` since the `.git-worklog/` layout and inert until now) and the new
+  `GIT_WORKLOG_LANGUAGE` environment variable. Priority runs: what you asked for
+  → CLI argument → project config → the agent host → environment → system locale
+  → English.
+
+  The tiers above "project config" are only visible to the agent running the
+  skill, so it resolves those and passes the answer down; the scripts resolve the
+  rest. An agent-hosted run **never** reads the OS locale (§6.2.5): a container
+  pinned to `en_US` says nothing about what you want. When nothing resolves, the
+  run says so — `source: "fallback"` plus a `LANGUAGE_NOT_RESOLVED` warning — so
+  the agent can re-run with an explicit language rather than quietly writing
+  English. A malformed `--language` fails the run instead of falling back, since
+  falling back would write English for someone who asked for something else and
+  mistyped it.
+
+  Bare `zh` is refused: it does not say Hant or Hans. Language *names*
+  (`chinese`, `traditional`) are not tags. `zh-TW` and `zh-CN` are never the same
+  setting; `zh-tw` and `zh-TW` always are.
+
+  Day results now declare their `language`, and it must match the manifest.
+  Validation is structural, never a language detector — correct `zh-TW`
+  engineering prose is full of English paths and symbols by contract, and a
+  detector would flag it. A run whose days disagree is partial and cannot apply.
+
+  Apply cannot change the language: `params.language` is part of the preview's
+  consistency check, so confirming a `zh-TW` preview and then asking for English
+  goes stale and asks for a fresh preview rather than writing prose nobody saw.
+
+  `index.md` decides its language once and keeps it — a config pin, else the
+  language stamped on the index when it was first built. Otherwise a `zh-TW`
+  developer and an English one would flip its headings back and forth in every
+  diff. Existing indexes carry no stamp and are read as `zh-TW`, so nothing is
+  retitled on upgrade. Index furniture ships in `zh-TW` and `en`; any other
+  language gets English furniture around day summaries written in that language,
+  rather than machine translations nobody here can proofread.
+
+  `doctor` and `validate` now check language settings for real, rather than
+  reporting them as skipped.
+
+  `--interface-language` on the CLI keeps the tool's own messages separate from
+  the worklog's language (§6.2.13): `--language zh-TW --interface-language en` is
+  a supported combination, and neither drags the other along. Messages ship in
+  English only for now — the roadmap allows that — but asking for another
+  language gets `INTERFACE_LANGUAGE_NOT_SUPPORTED` rather than silence that looks
+  like it worked. JSON keys never translate; they are API.
+
+- **A summary marker in day files** (`<!-- GIT_WORKLOG:SUMMARY:START -->`).
+  `index.md` used to find each day's summary by looking for the literal `當日摘要`
+  heading, which meant a day written in any other language got a blank index row
+  — no error, no warning, just a missing summary. The markers say *where* the
+  summary is without saying what language it is in. Day files written before them
+  keep working through the heading fallback and are never rewritten to gain one;
+  `validate` warns (`DAY_SUMMARY_UNMARKED`) that such a day would lose its
+  summary if regenerated in another language. As a side effect the participants
+  line can no longer hijack the index row, since it now sits outside the markers.
+
 - **A `git-worklog` CLI, and the `git_worklog` package behind it.** First three
   commands (roadmap §12.1): `version` reports the CLI, layout and config-schema
   versions separately; `doctor` checks whether this environment can actually run
@@ -28,10 +92,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   installed console script agrees with it. See issue #12.
 
   `doctor` and `validate` report what they did **not** check (`skipped`) rather
-  than omitting it: the language checks in §12.1 have nothing to check until the
-  language contract lands, and preview/analysis records are validated inside a
-  run, where the run id is known. A green check should never imply more coverage
-  than it has.
+  than omitting it: preview and analysis records are validated inside a run,
+  where the run id is known, so a worklog directory is the wrong place to judge
+  them. A green check should never imply more coverage than it has.
 
 - **`GIT_WORKLOG_HOME`** overrides the user-level state directory, which is now
   `~/.git-worklog/` (was `~/.repo_worklog/`). Nothing is migrated: previews
@@ -60,8 +123,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `PROJECT_WORKLOG/<date>.md` → `.git-worklog/days/<date>.md`;
   `PROJECT_WORKLOG/index.md` → `.git-worklog/index.md`. The directory also gains
   a `VERSION` (on-disk layout version) and a `config.json` (`schema_version`,
-  `timezone`, and language fields that are inert until the language contract
-  lands). Both are created on first write or migration and are never rewritten
+  `timezone`, `language` and `index_language`). Both are created on first write
+  or migration and are never rewritten
   afterwards — `config.json` is yours to edit.
 
   Markers are re-tagged `REPO_WORKLOG:` → `GIT_WORKLOG:`. The old prefix still

@@ -107,14 +107,27 @@ in the header.
 
 ## 3. Per-day generated template
 
-The text between the GENERATED markers is built from this template. Section
-headings are Traditional Chinese and used verbatim. Because there is no `## <date>`
-wrapper heading, sections sit at `##` and work items at `###`:
+The text between the GENERATED markers is built from this template. Because there
+is no `## <date>` wrapper heading, sections sit at `##` and work items at `###`.
+
+**The headings below are written in the run's resolved language** (roadmap
+§6.2.11) — they are shown here in Traditional Chinese because that is the
+default, not because the text is fixed. A run resolved to `en` writes
+`## Daily summary` and `## Changes`; a run resolved to `ja` writes them in
+Japanese. What is fixed is the *structure*: the summary first, bracketed by
+SUMMARY markers, then participants, then the work items.
+
+The **SUMMARY markers are mandatory and are not translated** — they are markup,
+like the GENERATED markers around them. They are what lets `index.md` find each
+day's summary without knowing what language that day was written in; a day
+without them falls back to a search for the literal heading `當日摘要`, which
+finds nothing in any other language and leaves that day's index row blank.
 
 ```markdown
 ## 當日摘要
-
+<!-- GIT_WORKLOG:SUMMARY:START -->
 簡述當日完成的主要工作與整體影響。
+<!-- GIT_WORKLOG:SUMMARY:END -->
 
 參與者：Alice Chen、Bob Lin
 
@@ -156,15 +169,19 @@ wrapper heading, sections sit at `##` and work items at `###`:
 
 ### Content rules
 
-- **`當日摘要`** — one short paragraph on the day's main work and overall impact.
-  Its **first line** is what `index.md` shows for the day, so lead with the
-  single most useful sentence.
+- **`當日摘要`** — one short paragraph on the day's main work and overall impact,
+  **bracketed by the SUMMARY markers**. Its first line is what `index.md` shows
+  for the day, so lead with the single most useful sentence. Exactly the summary
+  goes between the markers — not the participants line, not a heading.
 - **`參與者`** — the day's distinct commit authors, `、`-separated, on its own
-  line **below** the summary paragraph. The placement is load-bearing:
-  `summarise_generated()` takes the **first** non-empty, non-heading line under
-  `## 當日摘要` as the day's `index.md` row, so a `參與者` line placed above the
-  paragraph becomes the index summary and every row reads "參與者：…" instead of
-  what happened that day. Keep it after the paragraph.
+  line **below** the summary paragraph and **outside** the SUMMARY markers. The
+  placement used to be load-bearing in a fragile way: `summarise_generated()`
+  took the first non-empty line under `## 當日摘要`, so a `參與者` line above the
+  paragraph made every index row read "參與者：…" instead of what happened that
+  day — which is what shipped until an end-to-end run caught it. The markers
+  remove that trap, since anything outside them is not the summary. Keep the
+  line after the paragraph anyway: it reads correctly, and day files written
+  before the markers still rely on the old rule.
   Take the list verbatim from the manifest's `authors[]`, which is already
   deduplicated and ordered by first appearance — do not re-derive it by reading
   the commit list, and do not reorder or translate the names. Omit the line
@@ -235,7 +252,9 @@ INDEX MANUAL region is human-owned.
 - **Newest first.** Rows are sorted date-descending; the most recent day is at
   the top.
 - **One row per day file.** Each row links `./<date>.md` and shows that day's
-  one-line summary, derived from the day's `當日摘要` (collapsed to one line,
+  one-line summary, taken from between that day's SUMMARY markers — or, for day
+  files written before those existed, from under its `當日摘要` heading
+  (collapsed to one line,
   table-pipes escaped, length-capped).
 - **Only `<date>.md` files are indexed.** `index.md` itself and any other
   Markdown (README, notes) are ignored.

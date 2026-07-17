@@ -179,6 +179,24 @@ Rules:
 
 - **Read the GENERATED region and the MANUAL region.** Human notes in MANUAL are
   often the most valuable part of a day.
+- **Write the report in the language of the request, not the language of the day
+  files** (roadmap §6.2.11). A report is not bound to what it reads: day files
+  are written in the language of the run that produced them, and this report is
+  written in the language you are being asked in. Reading `zh-TW` day files and
+  producing an English release note is correct, and needs no conversion of
+  anything on disk — you are writing new prose, not translating a file. A range
+  whose days are in more than one language is not a problem to resolve either;
+  it is normal, and the report is still written in one language: the requested
+  one.
+  Resolve it exactly as `SKILL.md` §2a does — what the user asked for wins,
+  otherwise the language of this conversation. The repository's language never
+  votes, and neither does the day files'.
+- **Never translate identifiers when quoting a day file.** File paths, code
+  symbols, commit hashes, API names, branch and issue references and author
+  names stay verbatim in any output language — a reader must be able to grep
+  them straight out of the report. Day-file section headings are the day's
+  language and are not quoted as if they were yours; describe the content
+  instead.
 - **Answer the question asked.** A CHANGELOG is not a diary; a weekly summary is
   not a commit list. Structure the output for its purpose.
 - **Attribute where it matters.** Day files carry `參與者` and per-commit authors

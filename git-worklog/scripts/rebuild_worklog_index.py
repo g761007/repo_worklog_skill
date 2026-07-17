@@ -28,7 +28,10 @@ import os
 import sys
 import tempfile
 
+import _bootstrap  # noqa: F401 — must precede any git_worklog import
 import worklog_markers as wm
+
+from git_worklog import config, language
 
 DEFAULT_DIR = wm.WORKLOG_DIRNAME
 
@@ -123,6 +126,42 @@ def _atomic_write(target: str, content: str) -> None:
             os.unlink(tmp)
 
 
+def _resolve_index_language(worklog_dir: str, original: "str | None",
+                            requested: "str | None") -> "tuple[str, str]":
+    """Decide the index's language, and say what decided it (§6.2.12).
+
+    The index is navigation, not content: it is one file that every run
+    rewrites, and teams commit it. If each run rendered it in whatever language
+    that run happened to use, a repository with a zh-TW developer and an English
+    one would rewrite its headings back and forth forever and put that churn in
+    every diff. So the language is decided once and then left alone:
+
+      1. config's index_language, when the project pinned one -- an explicit
+         team decision outranks anything a single run wants.
+      2. the lang= already stamped on the index -- "first build wins", which is
+         the recommended default (§6.2.12).
+      3. an index that exists but carries no stamp is zh-TW, because that is the
+         only language anything could have written before this contract. Reading
+         it as unstamped-therefore-undecided would silently retitle every
+         existing index on upgrade.
+      4. otherwise this run's language: the index does not exist yet, so this
+         run is the first build and gets to choose.
+    """
+    pinned = config.index_language(config.load(worklog_dir))
+    if pinned:
+        return language.normalize(pinned), "project-config"
+
+    if original is not None:
+        stamped = wm.index_language_of(original)
+        if stamped:
+            return language.normalize(stamped), "existing-index"
+        return wm.DEFAULT_INDEX_LANGUAGE, "existing-index-unstamped"
+
+    if requested:
+        return language.normalize(requested), "run"
+    return wm.DEFAULT_INDEX_LANGUAGE, "default"
+
+
 def run(args: argparse.Namespace) -> int:
     worklog_dir = args.dir or DEFAULT_DIR
     index_path = wm.index_path(worklog_dir)
@@ -142,12 +181,15 @@ def run(args: argparse.Namespace) -> int:
 
     rows = [(d, summaries[d]) for d in sorted(summaries, reverse=True)]
     existing_manual = _read_index_manual(index_path)
-    content = wm.render_index(rows, existing_manual, layout)
 
     original = None
     if os.path.exists(index_path):
         with open(index_path, "r", encoding="utf-8") as fh:
             original = fh.read()
+
+    index_language, language_source = _resolve_index_language(
+        worklog_dir, original, args.language)
+    content = wm.render_index(rows, existing_manual, layout, index_language)
     action = ("no_change" if original == content
               else "create" if original is None else "rebuild")
 
@@ -157,6 +199,8 @@ def run(args: argparse.Namespace) -> int:
         "action": action,
         "dates": [d for d, _ in rows],
         "preserved_index_manual": existing_manual is not None,
+        "index_language": index_language,
+        "index_language_source": language_source,
         "index_hash": {"original": _sha256(original) if original is not None else None,
                        "preview": _sha256(content)},
         "warnings": warnings,
@@ -180,6 +224,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Rebuild PROJECT_WORKLOG/index.md from day files.")
     p.add_argument("--input", help="Optional overrides JSON, or '-' for stdin.")
     p.add_argument("--dir", help=f"Worklog directory (default: {DEFAULT_DIR}).")
+    p.add_argument("--language", default=None,
+                   help="This run's language, used only when the index does "
+                        "not exist yet. An index that already has a language "
+                        "keeps it (§6.2.12).")
     p.add_argument("--apply", action="store_true",
                    help="Write index.md. Without this flag the run is a dry-run.")
     return p

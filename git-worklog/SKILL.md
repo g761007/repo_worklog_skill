@@ -138,6 +138,57 @@ Modes `date` / `days` / `from`+`to` are mutually exclusive. Normalisation cases:
 
 ---
 
+## 2a. Resolve the output language (roadmap §6.2)
+
+**This is your job, not the scripts'.** The top of the priority order lives only
+in this conversation — what the user asked for, what language you are speaking,
+what the host is set to. A script cannot see any of it, and `--language` is how
+you tell it. Resolve **once per run** and thread the same tag everywhere.
+
+Priority, highest first:
+
+1. **What the user asked for in this request** — "用英文整理" → `en`. Always wins.
+2. **The project's `language` in `.git-worklog/config.json`**, if it is not
+   `auto`. The scripts read this themselves; pass `--language auto` and let them.
+3. **The language you are conversing in with this user, i.e. the host's
+   language.** This is the normal case and it is a real answer — pass it, with
+   `--language-source agent-host`.
+
+Then also pass `--language-source` saying which of those it was, so the manifest
+records *why* and not merely what:
+
+| You resolved it from | `--language-source` |
+|---|---|
+| The user asking for a language in this request | `user-request` |
+| The language of this conversation / your host | `agent-host` |
+| Nothing to say — let config and env decide | omit, with `--language auto` |
+
+**Do not let the repository choose.** English commit messages, English
+identifiers, English comments and an English README decide nothing. A fully
+English repo with a zh-TW conversation produces a zh-TW worklog. Do not "match
+the codebase", and do not read this English SKILL.md as a hint.
+
+**Do not infer from the OS locale.** You are an agent-hosted run, and
+`--language` is exactly the mechanism that keeps a container pinned to `en_US`
+from overriding a user speaking Chinese. The scripts will not consult the locale
+for you (§6.2.5); that is deliberate, not a gap to fill.
+
+If a run's manifest comes back with `source: "fallback"` and a
+`LANGUAGE_NOT_RESOLVED` warning, you failed to pass a language and the run is
+about to be written in English. **Re-run with an explicit `--language` rather
+than accepting it** (§6.2.14) — unless English is genuinely right.
+
+**Reports may differ from the worklog.** Day files are written in the language
+of the run that produced them; a report is written in the language of the
+request that asks for it (§6.2.11). Reading zh-TW day files and producing an
+English release note is correct and needs no conversion of anything on disk.
+
+**Never translate**: file paths, code symbols, commit hashes, API/class/package
+names, branch and issue references, or anything in `evidence[]`. Explaining a
+term in the output language is welcome; renaming it is not.
+
+---
+
 ## 3. Validate the date range (always first)
 
 ```
@@ -209,8 +260,13 @@ them with `git show`.
 ```
 python3 scripts/collect_git_history.py ... \
   | python3 scripts/build_analysis_manifest.py --date <day> --timezone <tz> \
+      --language <tag|auto> --language-source <source> \
       --provider <provider> --model-json '<model object>' [--include-uncommitted --worktree <file>]
 ```
+
+`--language` and `--language-source` come from §2a and are **identical for every
+day of the run** — a manifest's `language.resolved` is what each day's result is
+checked against, and days that disagree block the whole run.
 
 Resolve `<provider>` and `<model object>` **once for the whole run** with
 `scripts/resolve_provider_model.py --host <anthropic|openai|google>` (see the
@@ -235,7 +291,7 @@ write to the worklog. Days with no commits still write `has_changes:false`.
 
 ```
 python3 scripts/collect_day_results.py read --run-dir <run_dir> \
-    --dates <every dispatched date>
+    --dates <every dispatched date> --language <the manifest's language.resolved>
 ```
 
 It validates each file against the return schema and gives `results` (date →
@@ -293,9 +349,12 @@ describe it as committed. In a multi-day range, only today gets a worktree pass.
    mark the run **partial** and default to blocking apply (see error handling
    below).
 2. Render each day's GENERATED Markdown from the day template in
-   `references/worklog-format.md`. Omit empty sections — no walls of "無/N/A".
-   Days with no changes get no file by default. Lead each day's `當日摘要` with
-   its single most useful sentence — its first line becomes the index summary.
+   `references/worklog-format.md`, **in the run's resolved language** (§2a) —
+   headings included. Omit empty sections — no walls of "無/N/A". Days with no
+   changes get no file by default. Lead each day's summary with its single most
+   useful sentence and **bracket it in SUMMARY markers**; that line becomes the
+   index row, and without the markers a day written in anything but Traditional
+   Chinese gets a blank one.
 3. Simulate the day-file writes (dry-run is the default — no `--apply`). Pass
    `meta` (timezone/branch/short HEAD) and only dates that actually have content:
 
@@ -316,7 +375,7 @@ one-line index summary per date), `preserved_manual_dates`, and `file_hashes`
    so the preview reflects the about-to-be-written state without touching disk:
 
 ```
-python3 scripts/rebuild_worklog_index.py --dir .git-worklog <<'JSON'
+python3 scripts/rebuild_worklog_index.py --dir .git-worklog --language <tag> <<'JSON'
 {"overrides": {"2026-07-15": "新增會員搜尋快取並補充 API 測試", "...": "..."}}
 JSON
 ```
@@ -336,14 +395,21 @@ python3 scripts/preview_state.py create <<'JSON'
  "worklog": {"index_sha256": "<hash or 'missing'>",
              "day_files": {"2026-07-15": "<hash or 'missing'>"},
              "dir_fingerprint": "<hash of the sorted <date>.md listing>"},
- "params": {"mode": "days", "timezone": "...", "include_uncommitted": false}}
+ "params": {"mode": "days", "timezone": "...", "include_uncommitted": false,
+            "language": "<the run's resolved language>"}}
 JSON
 ```
 
+`params.language` is compared at apply. A user who confirms a zh-TW preview and
+then asks for English is asking for a **different worklog**, not the same one
+rendered differently: the preview goes stale, and you build and confirm a new one
+rather than applying the old payload under a new language (§6.2.10).
+
 6. Show the user the dry-run summary described in
    `references/interaction-flow.md`: repository root, branch, HEAD, timezone,
-   requested mode, resolved range, `include_uncommitted`, the **subagent
-   configuration** (provider, model, reasoning effort, automatic escalation:
+   requested mode, resolved range, `include_uncommitted`, the **output
+   language** (and, when it came from `fallback`, say so — the user may want to
+   correct it before anything is written), the **subagent configuration** (provider, model, reasoning effort, automatic escalation:
    disabled), per-day commit counts and status, files analyzed, per-date planned
    action (create / overwrite / no-change), the index rebuild, preserved MANUAL
    dates, each day file's full preview, the index preview, the target directory
@@ -385,7 +451,7 @@ JSON
 python3 scripts/update_daily_worklog.py --dir .git-worklog --apply <<'JSON'
 {"meta": { ...same meta... }, "entries": { ...same entries as the dry-run... }}
 JSON
-python3 scripts/rebuild_worklog_index.py --dir .git-worklog --apply
+python3 scripts/rebuild_worklog_index.py --dir .git-worklog --language <tag> --apply
 ```
 
    The day-file write is all-or-nothing. The index is a pure function of the day

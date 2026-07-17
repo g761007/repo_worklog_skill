@@ -30,8 +30,8 @@ sees and every decision that spans more than one day:
 - result-completeness checks (`collect_day_results.py read`: every dispatched
   date produced a valid object on disk),
 - cross-day deduplication,
-- Markdown generation (one GENERATED block per day; the `當日摘要` first line
-  becomes that day's row in `index.md`),
+- Markdown generation (one GENERATED block per day, in the run's resolved
+  language; the SUMMARY-marked line becomes that day's row in `index.md`),
 - dry-run, preview management, and writing (`update_daily_worklog.py`,
   `rebuild_worklog_index.py`, `preview_state.py`).
 
@@ -201,6 +201,7 @@ markdown fence.
 {
   "date": "YYYY-MM-DD",
   "timezone": "Asia/Taipei",
+  "language": "zh-TW",
   "status": "complete",
   "confidence": "verified",
   "escalation_recommended": false,
@@ -332,6 +333,55 @@ entry can be traced back to the analysis that produced it.
 
 ---
 
+## 6b. Language (roadmap §6.2)
+
+**`language` is copied from the manifest's `language.resolved`, verbatim. It is
+never a choice.** The subagent does not decide, detect, negotiate or improve on
+it. Copy the tag exactly as given — `zh-TW` stays `zh-TW`, not `zh`, not
+`zh-Hant`, not `Traditional Chinese`.
+
+`collect_day_results.py` rejects the day if `language` is missing, is not a BCP
+47 tag, or is not the tag the manifest asked for. A rejected day blocks the whole
+run from apply, so getting this wrong wastes the entire analysis, not just the
+field.
+
+**Write every word of prose in the resolved language.** That means `summary`,
+`title`, `behavior_change`, `implementation`, `impact`, `risks`,
+`maintenance_notes`, `follow_ups`, `handoff_notes`, `uncertainties` — all of it.
+
+**The repository's language does not vote.** This is the rule most likely to be
+broken, because the pull toward English is constant and every input is shouting
+it: the commit messages are English, the identifiers are English, the comments
+are English, this contract is English, and the code you just read is English.
+None of that decides anything. A repository can be entirely English and the
+manifest can say `zh-TW`, and then the worklog is Traditional Chinese. That is
+not a conflict to resolve — it is the normal case.
+
+```text
+Commit message: Fix token refresh race condition
+Manifest language.resolved: zh-TW
+
+→ 修正 Token Refresh 的競態條件，避免多個更新請求同時覆寫憑證狀態。
+```
+
+**Never translate these, in any language:**
+
+| Never translated | Example |
+|---|---|
+| File and directory paths | `src/auth/token_manager.py` |
+| Code symbols | `refresh_token`, `TokenRefreshError` |
+| Commit hashes | `4d08ee4` |
+| API, class and package names | `AbortController`, `requests` |
+| Branch, tag and issue references | `feat/cli-foundation`, `#42` |
+| Everything in `evidence[]` | it is a citation, not prose |
+
+Explaining a term in the resolved language is welcome; renaming the thing is not.
+Write `TokenRefreshError（更新憑證時拋出的例外）`, never `更新憑證錯誤`. A reader
+must be able to grep every identifier you name straight out of the worklog and
+land in the code.
+
+---
+
 ## 7. Confidence
 
 Every `work_item` carries a `confidence`. Allowed values (plan §13.1):
@@ -439,6 +489,7 @@ INPUTS
 - repository root:    [absolute path]
 - include_uncommitted:[true|false]   (uncommitted content belongs to TODAY only)
 - provider / model:   [anthropic|openai|google] / [model_id from the manifest's model.model_id]
+- output language:    [the manifest's language.resolved, e.g. zh-TW]
 - output path:        [paths[<date>] — where your JSON must be written]
 - analysis manifest (from build_analysis_manifest.py):
 [PASTE THE MANIFEST JSON HERE, or give its file path if large]
@@ -477,6 +528,16 @@ OUTPUT
   6 of the subagent contract). All keys present; empty arrays where nothing
   applies. A day with no work still writes a valid object with has_changes:false
   — never skip the write.
+- LANGUAGE. Copy the output language above into the "language" field verbatim,
+  and write EVERY field of prose in it — summary, title, behavior_change,
+  implementation, impact, risks, maintenance_notes, follow_ups, handoff_notes,
+  uncertainties. This is validated: a wrong or missing language fails the day and
+  blocks the whole run. The repository's own language does NOT decide this. The
+  commits, identifiers, comments and docs you are about to read may be entirely
+  English while the output language is zh-TW — that is the normal case, not a
+  conflict. Never translate file paths, code symbols, commit hashes, API names,
+  branch/issue references, or anything in evidence[]; explaining a term in the
+  output language is welcome, renaming it is not. Section 6b has the details.
 - Set status (complete|partial|failed), the day-level confidence
   (verified|inferred|unknown), and escalation_recommended + escalation_reasons[]
   honestly per section 7. escalation_recommended is a SUGGESTION only — never

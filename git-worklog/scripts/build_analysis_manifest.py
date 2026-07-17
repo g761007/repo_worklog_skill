@@ -19,6 +19,11 @@ import json
 import os
 import sys
 
+import _bootstrap  # noqa: F401 — must precede any git_worklog import
+
+from git_worklog import config, language
+from git_worklog import markers as wm
+
 # Number of changed files above which a day is flagged as "large" and the Day
 # Subagent is advised to fan out into Code Analysis Subagents.
 LARGE_DAY_FILE_THRESHOLD = 25
@@ -209,8 +214,30 @@ def _parse_model(model_json: str) -> dict | None:
     return model
 
 
+def _resolve_language(args: argparse.Namespace) -> language.Resolution:
+    """Decide this run's output language (§6.2.1).
+
+    ``allow_locale`` is off: a manifest exists to be handed to an agent's LLM,
+    which makes this an agent-hosted run by definition, and §6.2.5 is explicit
+    that the host OS locale must not decide there — CI and dev containers are
+    pinned to C or en_US and say nothing about what the user wants. The tiers
+    above config live in the agent, which passes them down with --language.
+    """
+    worklog_dir = args.dir or os.path.join(".", wm.WORKLOG_DIRNAME)
+    return language.resolve(
+        explicit=args.language,
+        source=args.language_source,
+        config_value=config.language(config.load(worklog_dir)),
+        allow_locale=False,
+    )
+
+
 def build_manifest(args: argparse.Namespace) -> dict:
     model = _parse_model(args.model_json)
+    try:
+        lang = _resolve_language(args)
+    except language.LanguageError as exc:
+        _fail(exc.code, exc.message, **exc.extra)
     history = _load_json(args.history)
     if history and not history.get("ok", True):
         _fail("BAD_HISTORY_INPUT", "collect_git_history reported an error.",
@@ -238,6 +265,8 @@ def build_manifest(args: argparse.Namespace) -> dict:
         "ok": True,
         "date": args.date,
         "timezone": args.timezone,
+        "language": lang.as_manifest(),
+        "warnings": lang.warnings,
         "include_uncommitted": bool(args.include_uncommitted),
         "provider": args.provider,
         "model": model,
@@ -277,6 +306,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model-json", default="",
                    help="Structured model object from resolve_provider_model.py "
                         "(JSON: {display_name, model_id[, reasoning_effort]}).")
+    p.add_argument("--language", default="auto",
+                   help="Output language as a BCP 47 tag (zh-TW, en, ja), or "
+                        "'auto' to fall through to project config and "
+                        "GIT_WORKLOG_LANGUAGE.")
+    p.add_argument("--language-source", default=None,
+                   help="Where --language came from, so the manifest records "
+                        "why and not just what: user-request, agent-host, "
+                        "conversation, cli-argument, project-config, "
+                        "environment, system-locale, fallback.")
+    p.add_argument("--dir", help="Worklog directory, read for its config.json "
+                                 f"language setting (default: ./{wm.WORKLOG_DIRNAME}).")
     return p
 
 
