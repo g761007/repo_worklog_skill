@@ -340,7 +340,7 @@ by feature/module (see `references/subagent-contract.md`).
 
 Model per host — resolve the provider you are running under with
 `resolve_provider_model.py --host <key>` and pass its `model_id` (cost-first
-defaults; single source is `config/provider_models.json`):
+defaults; single source is `git_worklog/data/provider_models.json`):
 
 | Host        | provider key | default display | default model_id      |
 |-------------|--------------|-----------------|-----------------------|
@@ -547,7 +547,7 @@ The rest of the deterministic work is still scripts:
 
 | Script | Role |
 |--------|------|
-| `resolve_provider_model.py` | Resolve the per-host subagent provider/model (single source `config/provider_models.json`; overrides, escalation, halt-and-ask) |
+| `resolve_provider_model.py` | Resolve the per-host subagent provider/model (single source `git_worklog/data/provider_models.json`; overrides, escalation, halt-and-ask) |
 | `resolve_date_range.py` | Parse/validate dates, timezone, day-span limit (`--max-days`, default 30), per-day bounds |
 | `resolve_ref_range.py` | Report mode: resolve a tag/ref to its authoritative commit set + derived dates |
 | `check_worklog_coverage.py` | Report mode: per-date coverage — `covered` / `gap` / `no-commits` |

@@ -79,3 +79,19 @@ jobs:
           git-worklog --version
           git-worklog version
           test "$(git-worklog --version)" = "git-worklog $(python -c 'import git_worklog; print(git_worklog.__version__)')"
+
+      # provider_models.json is package data, and package data is exactly the
+      # kind of thing that silently stops shipping. An installed CLI with no
+      # model to resolve fails only when someone asks it for one.
+      - name: The installed package carries provider_models.json
+        run: |
+          cd "$(mktemp -d)"          # not the source tree: prove it is installed
+          python -c "
+          import os
+          from git_worklog import providers
+          p = providers.default_config_path()
+          assert os.path.isfile(p), f'provider_models.json not installed at {p}'
+          r = providers.resolve(host='anthropic')
+          assert r['model']['model_id'], 'installed config resolved no model id'
+          print('resolved', r['model']['model_id'], 'from', r['model_id_source'])
+          "

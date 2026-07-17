@@ -17,7 +17,7 @@ import unittest
 from helpers import run_script, ROOT
 
 SKILL_DIR = os.path.join(ROOT, "git-worklog")
-CONFIG_PATH = os.path.join(SKILL_DIR, "config", "provider_models.json")
+CONFIG_PATH = os.path.join(SKILL_DIR, "git_worklog", "data", "provider_models.json")
 
 NEW_DEFAULTS = {
     "anthropic": "claude-haiku-4-5",

@@ -22,10 +22,10 @@ git-worklog/                  # the skill (this whole directory is the skill)
 ├── SKILL.md                  # control layer: triggers, flow, script/reference map
 ├── agents/
 │   └── openai.yaml           # host manifest: display name, UI metadata, model_config pointer
-├── config/
-│   └── provider_models.json  # single source of truth for per-host subagent models
 ├── git_worklog/              # the engine + `git-worklog` CLI (stdlib only)
 │   ├── __init__.py           # __version__ — the single source of the product version
+│   ├── data/
+│   │   └── provider_models.json  # single source of truth for per-host subagent models
 │   ├── markers.py            # day/index parser/serialiser; the format's definition
 │   ├── paths.py              # user-level state dir ($GIT_WORKLOG_HOME, ~/.git-worklog)
 │   ├── language.py           # BCP 47 resolution; the run's one output language
@@ -259,7 +259,7 @@ the old file, and refuses if the legacy markers are corrupt.
   treated as the same setting. Paths, code symbols, commit hashes and API names
   are never translated in any language. `index.md` fixes its language on first
   build so it does not churn between contributors. See roadmap §6.2.
-- **Subagent models:** defined once in `git-worklog/config/provider_models.json`
+- **Subagent models:** defined once in `git-worklog/git_worklog/data/provider_models.json`
   (cost-first defaults — Claude Haiku 4.5 / GPT-5.6 Luna / Gemini 3.5 Flash) and
   resolved per host by `resolve_provider_model.py`. Override with
   `GIT_WORKLOG_{ANTHROPIC,OPENAI,GOOGLE}_MODEL` or an explicit `--model`. See
@@ -351,7 +351,6 @@ subagent 分析，所有變更都先以 dry-run 預覽，**經你明確確認後
 - `git-worklog/`：整個目錄就是 skill 本體。
   - `SKILL.md`：控制層——觸發條件、流程、腳本與 references 對照。
   - `agents/openai.yaml`：宿主 manifest——顯示名稱、UI metadata、model_config 指標。
-  - `config/provider_models.json`：逐宿主 subagent 模型的**單一設定來源**。
   - `scripts/`：套件的命令列薄殼（僅用標準庫，各自輸出單一 JSON）。
     - `resolve_provider_model.py`：依宿主解析 provider／模型（覆寫、escalation、halt-and-ask）。
     - `resolve_date_range.py`：日期／時區解析、日數上限（`--max-days`，預設 30）、逐日半開區間。
@@ -369,6 +368,8 @@ subagent 分析，所有變更都先以 dry-run 預覽，**經你明確確認後
     - `worklog_markers.py`：相容轉接層，實際模組為 `git_worklog.markers`。
   - `git_worklog/`：引擎與 `git-worklog` CLI 本體（僅標準庫）。
     - `__init__.py`：`__version__`——產品版本的單一來源。
+    - `data/provider_models.json`：逐宿主 subagent 模型的**單一設定來源**（放在
+      套件內，安裝版 CLI 才讀得到）。
     - `markers.py`：日期檔／索引的解析與序列化，即格式的定義。
     - `paths.py`：使用者層級狀態目錄（`$GIT_WORKLOG_HOME`、`~/.git-worklog`）。
     - `language.py`：BCP 47 語言解析——一個 run 只有一種輸出語言。
@@ -556,7 +557,7 @@ skill 會明講並詢問是否先補齊——**絕不默默降級成摘要 commi
   `zh-TW` 與 `zh-CN` 永不視為同一設定。任何語言下，檔案路徑、程式符號、commit hash
   與 API 名稱都不翻譯。`index.md` 於首次建立時固定語言，避免不同貢獻者反覆改寫。
   詳見 roadmap §6.2。
-- **Subagent 模型**：於 `git-worklog/config/provider_models.json` 統一設定
+- **Subagent 模型**：於 `git-worklog/git_worklog/data/provider_models.json` 統一設定
   （成本優先預設——Claude Haiku 4.5 ／ GPT-5.6 Luna ／ Gemini 3.5 Flash），由
   `resolve_provider_model.py` 依宿主解析；可用
   `GIT_WORKLOG_{ANTHROPIC,OPENAI,GOOGLE}_MODEL` 或 `--model` 覆寫，詳見

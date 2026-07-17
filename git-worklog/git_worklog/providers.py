@@ -4,15 +4,16 @@ The Git Worklog orchestrator runs under exactly one host — Claude Code
 (``anthropic``), Codex (``openai``), or Gemini (``google``) — and every Day
 Subagent and Code Analysis Subagent for a run executes on that host's single
 model. This is the deterministic, single-source resolver: it reads
-``config/provider_models.json`` (the only machine-readable model source), selects
-the entry for the given host, and applies the override precedence.
+``git_worklog/data/provider_models.json`` (the only machine-readable model
+source), selects the entry for the given host, and applies the override
+precedence.
 
 Override precedence for the model id (highest first):
 
   1. ``model`` (explicit runtime/CLI model id)
   2. environment variable ``GIT_WORKLOG_<HOST>_MODEL`` (or the deprecated
      ``REPO_WORKLOG_<HOST>_MODEL``)
-  3. the provider default in ``config/provider_models.json``
+  3. the provider default in ``git_worklog/data/provider_models.json``
 
 The host is NEVER guessed: a missing or unknown host is a configuration error,
 never a silent pick of the first provider. A model that cannot be resolved (empty
@@ -51,20 +52,16 @@ class ProviderError(ValueError):
 
 
 def default_config_path() -> str:
-    """``config/provider_models.json`` as shipped beside the package.
+    """``provider_models.json`` as shipped inside the package.
 
-    The package sits inside the skill directory, so this resolves to the same
-    file whether it is reached from ``scripts/`` or from the package -- there is
-    one config, not one per front end.
-
-    Note: ``config/`` is not part of the wheel (only ``git_worklog*`` is), so an
-    installed CLI will not find it here and gets a loud CONFIG_NOT_FOUND rather
-    than a wrong model. Relocating the file into the package is PR 7b's call, on
-    the PR that actually gives the CLI a provider subcommand.
+    It lives in the package rather than in a sibling ``config/`` directory
+    because only ``git_worklog*`` is packaged: from a sibling, an installed CLI
+    could not find it and would have no model to resolve. Here, the skill layout
+    and the wheel reach the same one file -- which is the point of calling it the
+    single source of truth.
     """
-    return os.path.normpath(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                     "..", "config", "provider_models.json"))
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "data", "provider_models.json")
 
 
 def env_var(host: str) -> str:

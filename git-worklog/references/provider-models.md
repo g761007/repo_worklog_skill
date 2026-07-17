@@ -1,7 +1,7 @@
 # Provider Models
 
 Per-host subagent model selection for the `git-worklog` skill. The **single
-source of truth** is `config/provider_models.json`; this document is its
+source of truth** is `git_worklog/data/provider_models.json`; this document is its
 human-facing mirror. Never add a second place that stores model ids — update the
 JSON and this file only.
 
@@ -66,7 +66,7 @@ For a given host, the model id is chosen in this order (highest first):
 
 1. an explicit runtime id passed to the command (`--model`),
 2. the environment variable for that provider,
-3. the provider default in `config/provider_models.json`.
+3. the provider default in `git_worklog/data/provider_models.json`.
 
 The skill never auto-substitutes an arbitrary host default beyond step 3.
 

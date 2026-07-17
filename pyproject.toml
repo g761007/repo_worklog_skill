@@ -47,5 +47,11 @@ package-dir = { "" = "git-worklog" }
 where = ["git-worklog"]
 include = ["git_worklog*"]
 
+# provider_models.json is the single source of truth for per-host subagent
+# models, so it has to reach every front end. Only `git_worklog*` is packaged --
+# from a sibling `config/` directory an installed CLI would find nothing.
+[tool.setuptools.package-data]
+git_worklog = ["data/*.json"]
+
 [tool.setuptools.dynamic]
 version = { attr = "git_worklog.__version__" }

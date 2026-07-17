@@ -6,7 +6,7 @@ around it. The logic moved into the package because only ``git_worklog*`` is
 packaged -- an installed CLI has no ``scripts/`` directory to reach for -- and
 the two front ends must not drift apart.
 
-It reads ``config/provider_models.json`` (the only machine-readable model
+It reads ``git_worklog/data/provider_models.json`` (the only machine-readable model
 source), selects the entry for the given host, applies the override precedence,
 and emits the resolved model as JSON for ``build_analysis_manifest.py`` and the
 dry-run summary.
@@ -16,7 +16,7 @@ Override precedence for the model id (highest first):
   1. ``--model`` (explicit runtime/CLI model id)
   2. environment variable ``GIT_WORKLOG_<HOST>_MODEL`` (or the
      deprecated ``REPO_WORKLOG_<HOST>_MODEL``)
-  3. the provider default in ``config/provider_models.json``
+  3. the provider default in ``git_worklog/data/provider_models.json``
 
 The host is NEVER guessed: a missing or unknown host is a configuration error,
 never a silent pick of the first provider. A model that cannot be resolved (empty
