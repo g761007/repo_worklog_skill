@@ -8,6 +8,28 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Evidence citations are now checked against the repository, not just for
+  presence** (#15). `collect_day_results.py read` gains a required `--repo` and
+  verifies every evidence entry against the tree of the commit it cites: the
+  commit exists, the file existed *at that commit*, the `symbol` appears in it,
+  and the `lines` range is inside it. A citation that does not resolve fails the
+  day and blocks apply — the same outcome prose evidence already got, because a
+  name that leads nowhere is worth the same.
+
+  Found by dogfooding: a real run produced 7 fabrications in 32 entries and
+  every one passed, because only `commit` and `file` were ever enforced and
+  those were genuine. `symbol` and `lines` were decorative — they looked like
+  citations and were not. Every fabrication was a *plausible* name
+  (`migrate_directory` for `parse_legacy`, `preview_dir` for `previews_dir`, a
+  line range past EOF), which is exactly why a reader cannot catch them and the
+  check has to be mechanical.
+
+  A shallow clone reports `EVIDENCE_UNVERIFIABLE` instead of failing the day:
+  the commits are unreachable because of the runner's clone depth, which is not
+  the subagent's fault. An invented hash in a full clone is
+  `EVIDENCE_COMMIT_UNKNOWN` and does fail.
+
+
 - **A BCP 47 language contract (roadmap §6.2).** The worklog is written in the
   language you are asking in, not the language the repository happens to be in.
   A repo full of English commit messages, English identifiers and an English

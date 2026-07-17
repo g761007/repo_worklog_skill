@@ -291,8 +291,18 @@ write to the worklog. Days with no commits still write `has_changes:false`.
 
 ```
 python3 scripts/collect_day_results.py read --run-dir <run_dir> \
-    --dates <every dispatched date> --language <the manifest's language.resolved>
+    --dates <every dispatched date> --language <the manifest's language.resolved> \
+    --repo <root>
 ```
+
+`--repo` is required: every evidence entry is checked against the tree of the
+commit it cites — the commit exists, the file existed *at that commit*, the
+symbol appears in it, the line range is inside it. A citation that does not
+resolve fails the day, exactly as prose evidence does; a subagent that cites
+`migrate_directory` for a function called `parse_legacy` has told you nothing you
+can follow (#15). On a shallow clone the unreachable commits report
+`EVIDENCE_UNVERIFIABLE` rather than failing the day — that is the runner's clone
+depth, not the subagent's fault.
 
 It validates each file against the return schema and gives `results` (date →
 object), `complete`, `degraded`, `missing`, `invalid`, `failed_dates`,
