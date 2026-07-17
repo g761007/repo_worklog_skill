@@ -30,11 +30,14 @@ git-worklog/                  # the skill (this whole directory is the skill)
 │   ├── paths.py              # user-level state dir ($GIT_WORKLOG_HOME, ~/.git-worklog)
 │   ├── language.py           # BCP 47 resolution; the run's one output language
 │   ├── config.py             # project config.json reader
+│   ├── dates.py              # date/timezone contract; the day window everything agrees on
+│   ├── providers.py          # per-host provider/model resolution (overrides, escalation)
 │   ├── writer.py             # planning and transactionally writing day files + index.md
 │   ├── preview.py            # the immutable preview record, its state machine and apply lock
-│   ├── analysis/             # the pipeline: history -> manifest -> results (+ worktree)
+│   ├── migrate.py            # one-time migration of a legacy worklog into .git-worklog/
+│   ├── analysis/             # the pipeline: history -> manifest -> results (+ worktree, refs, coverage)
 │   └── cli/                  # version / doctor / validate / analyze / preview / apply
-├── scripts/                  # deterministic Python helpers (stdlib only)
+├── scripts/                  # thin command-line shells over the package (stdlib only)
 │   ├── resolve_provider_model.py    # resolve per-host provider/model (overrides, escalation, halt-and-ask)
 │   ├── resolve_date_range.py        # date/timezone parsing, day-span cap, per-day bounds
 │   ├── resolve_ref_range.py         # report mode: tag/ref -> authoritative commit set
@@ -349,7 +352,7 @@ subagent 分析，所有變更都先以 dry-run 預覽，**經你明確確認後
   - `SKILL.md`：控制層——觸發條件、流程、腳本與 references 對照。
   - `agents/openai.yaml`：宿主 manifest——顯示名稱、UI metadata、model_config 指標。
   - `config/provider_models.json`：逐宿主 subagent 模型的**單一設定來源**。
-  - `scripts/`：確定性 Python 腳本（僅用標準庫，各自輸出單一 JSON）。
+  - `scripts/`：套件的命令列薄殼（僅用標準庫，各自輸出單一 JSON）。
     - `resolve_provider_model.py`：依宿主解析 provider／模型（覆寫、escalation、halt-and-ask）。
     - `resolve_date_range.py`：日期／時區解析、日數上限（`--max-days`，預設 30）、逐日半開區間。
     - `resolve_ref_range.py`：報告模式——把 tag／ref 解析成權威的 commit 集合與對應日期。
@@ -370,9 +373,12 @@ subagent 分析，所有變更都先以 dry-run 預覽，**經你明確確認後
     - `paths.py`：使用者層級狀態目錄（`$GIT_WORKLOG_HOME`、`~/.git-worklog`）。
     - `language.py`：BCP 47 語言解析——一個 run 只有一種輸出語言。
     - `config.py`：專案 `config.json` 讀取。
+    - `dates.py`：日期／時區契約，以及全工具共用的單日半開區間。
+    - `providers.py`：依宿主解析 provider／模型（覆寫、escalation）。
     - `writer.py`：規劃並以交易方式寫入日期檔與 `index.md`。
     - `preview.py`：不可變的 preview record、其狀態機與 apply 鎖。
-    - `analysis/`：分析流程（history → manifest → results，另有 worktree）。
+    - `migrate.py`：一次性把舊版工作日誌遷移進 `.git-worklog/`。
+    - `analysis/`：分析流程（history → manifest → results，另有 worktree、refs、coverage）。
     - `cli/`：`version`／`doctor`／`validate`／`analyze`／`preview`／`apply`。
   - `references/`：skill 依需求載入的詳細規格（報告模式、互動流程、日期契約、
     程式碼分析規則、subagent 契約、工作日誌格式、模型設定）。

@@ -242,6 +242,25 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The last script-local engines moved into the package** (#7). Date resolution,
+  ref-range resolution, provider/model resolution, coverage and legacy migration
+  were business logic living in `scripts/`, where only a script could reach them
+  — an installed `git-worklog` has no `scripts/` directory to shell out to. They
+  are now `git_worklog/dates.py`, `analysis/refs.py`, `providers.py`,
+  `analysis/coverage.py` and `migrate.py`; the scripts are thin shells over them
+  and their JSON contracts are unchanged.
+
+  Failures that were `sys.exit(2)` calls buried in the logic are now exceptions
+  carrying the wire code (`DateError`, `ProviderError`, `MigrateError`,
+  `AnalysisError`), so the same rules can serve a CLI subcommand that has to
+  render them differently. `scripts/` drops from 2029 to 1189 lines.
+
+  The half-open local-midnight day window was written out three times — in
+  `resolve_date_range.py` and, twice, as copies commented "matching
+  resolve_date_range.py". It is now `dates.day_window()` alone: what a day file
+  covers, what a subagent is asked about, and what report mode counts commits in
+  are the same window by construction rather than by three authors agreeing.
+
 - **The worklog writer moved into the package** (`git_worklog/writer.py`) (#6).
   `preview` has to compute the exact bytes it stores and `apply` has to write
   them, but the planning and the transactional write lived in `scripts/`, which
