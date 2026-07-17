@@ -7,7 +7,10 @@ decide what must be analysed and check what came back, while the analysis itself
 stays with the hosting agent's LLM. The CLI does not replace it and needs no
 model API key (§6.1). ``preview`` and ``apply`` (§10) close the loop: the first
 turns a collected run plus the agent's prose into a frozen payload, the second
-writes that payload and takes no other input.
+writes that payload and takes no other input. ``coverage`` and ``refs`` serve
+report mode's two questions — "is there an analysis behind these dates?" and
+"which commits is this version actually made of?" — and ``migrate`` (§2.4) moves
+a legacy worklog into the current layout.
 
 Every subcommand prints one JSON object to stdout, matching the scripts'
 contract, so the same parsing works everywhere. ``--text`` switches to a
@@ -170,6 +173,55 @@ def build_parser() -> argparse.ArgumentParser:
                          "content comes from the record, never from the caller.")
     ap.add_argument("--now", help="Override current time (ISO 8601) for "
                                   "deterministic runs.")
+
+    cov = sub.add_parser("coverage",
+                         help="Which dates have a worklog behind them (report mode).")
+    cov.add_argument("--dates", required=True, metavar="LIST",
+                     help="Comma-separated ISO dates, e.g. 2026-07-01,2026-07-02.")
+    cov.add_argument("--repo", default=".", help="Repository to read (default: cwd).")
+    cov.add_argument("--dir", default=wm.WORKLOG_DIRNAME,
+                     help="Worklog directory, absolute or relative to the repo "
+                          f"root (default: {wm.WORKLOG_DIRNAME}).")
+    cov.add_argument("--timezone", default="UTC",
+                     help="IANA timezone deciding each day's bounds (default: UTC).")
+    cov.add_argument("--date-field", choices=["committer", "author"],
+                     default="committer",
+                     help="Which date decides day attribution (default: committer).")
+    cov.add_argument("--worklog-dir", default=None,
+                     help="Repo-relative worklog path whose commits count as "
+                          "self-referential and are excluded from the counts.")
+
+    rf = sub.add_parser("refs",
+                        help="Resolve a tag into its commit set (report mode).")
+    rf.add_argument("--tag", help="Tag to report on; its predecessor is found "
+                                  "automatically.")
+    rf.add_argument("--from-ref", help="Explicit range start, exclusive (any ref).")
+    rf.add_argument("--to-ref", help="Explicit range end, inclusive (any ref).")
+    rf.add_argument("--list-tags", action="store_true",
+                    help="List the repository's tags, newest-first.")
+    rf.add_argument("--repo", default=".", help="Repository to read (default: cwd).")
+    rf.add_argument("--timezone", default="UTC",
+                    help="IANA timezone deciding each commit's calendar day "
+                         "(default: UTC).")
+    rf.add_argument("--date-field", choices=["committer", "author"],
+                    default="committer",
+                    help="Which date decides day attribution (default: committer).")
+
+    mg = sub.add_parser("migrate",
+                        help="Move a legacy worklog into .git-worklog/ (dry-run "
+                             "by default).")
+    mg.add_argument("--from-dir", dest="from_dir",
+                    help="Flat legacy worklog directory (v0.2-v0.5).")
+    mg.add_argument("--from-file", dest="from_file",
+                    help="Single-file legacy worklog (pre-v0.2).")
+    mg.add_argument("--dir", help=f"Target worklog directory (default: "
+                                  f"{wm.WORKLOG_DIRNAME}).")
+    mg.add_argument("--timezone",
+                    help="Timezone recorded in config.json, and in each day file's "
+                         "header when migrating from a single file. Ignored for "
+                         "--from-dir, whose day files already record their own.")
+    mg.add_argument("--apply", action="store_true",
+                    help="Write the migration. Without this the run is a dry-run.")
     return p
 
 
@@ -181,19 +233,30 @@ def main(argv: "list[str] | None" = None) -> int:
         return 0
 
     # Imported lazily so `git-worklog version` stays fast and cannot be broken
-    # by an unrelated subcommand's import.
+    # by an unrelated subcommand's import. Spelled out rather than defaulted:
+    # argparse already rejects an unknown command, so a name reaching here with
+    # no module is a wiring mistake, and it should say so instead of quietly
+    # running whichever subcommand happened to be the fallback.
     if args.command == "version":
         from git_worklog.cli import version as cmd
     elif args.command == "doctor":
         from git_worklog.cli import doctor as cmd
+    elif args.command == "validate":
+        from git_worklog.cli import validate as cmd
     elif args.command == "analyze":
         from git_worklog.cli import analyze as cmd
     elif args.command == "preview":
         from git_worklog.cli import preview as cmd
     elif args.command == "apply":
         from git_worklog.cli import apply as cmd
+    elif args.command == "coverage":
+        from git_worklog.cli import coverage as cmd
+    elif args.command == "refs":
+        from git_worklog.cli import refs as cmd
+    elif args.command == "migrate":
+        from git_worklog.cli import migrate as cmd
     else:
-        from git_worklog.cli import validate as cmd
+        raise AssertionError(f"no module wired for command {args.command!r}")
 
     # §6.2.13 keeps interface language and content language apart. Phase one
     # ships English messages only -- which the roadmap allows -- but an

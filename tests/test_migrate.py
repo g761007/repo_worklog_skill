@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from helpers import run_script, rmtree, day_file, legacy_day_file, wm
+from helpers import run_cli, run_script, rmtree, day_file, legacy_day_file, wm
 
 LEGACY = """\
 # Project Worklog
@@ -275,6 +275,55 @@ class TestMigrateFromDir(unittest.TestCase):
                              ["--from-dir", self.work, "--dir", self.dst])
         self.assertFalse(d["ok"])
         self.assertEqual(d["errors"][0]["code"], "SOURCE_NOT_LEGACY")
+
+
+class TestMigrateCli(unittest.TestCase):
+    """`git-worklog migrate` — the same engine on the CLI surface (roadmap §2.4)."""
+
+    def setUp(self):
+        self.work = tempfile.mkdtemp(prefix="rw_migcli_")
+        self.legacy = os.path.join(self.work, "docs", "PROJECT_WORKLOG.md")
+        os.makedirs(os.path.dirname(self.legacy))
+        Path(self.legacy).write_text(LEGACY, encoding="utf-8")
+        self.dir = os.path.join(self.work, wm.WORKLOG_DIRNAME)
+
+    def tearDown(self):
+        rmtree(self.work)
+
+    def _run(self, *extra):
+        return run_cli("migrate", "--from-file", self.legacy, "--dir", self.dir,
+                       "--timezone", "Asia/Taipei", *extra)
+
+    def test_dry_run_is_what_you_get_for_not_asking(self):
+        """No --apply, no writes. The safe direction is the default one."""
+        d, rc, err = self._run()
+        self.assertTrue(d["ok"], err)
+        self.assertEqual(rc, 0)
+        self.assertEqual(d["mode"], "dry-run")
+        self.assertFalse(os.path.isdir(self.dir))
+
+    def test_apply_writes_the_days_and_keeps_the_source(self):
+        d, rc, err = self._run("--apply")
+        self.assertTrue(d["ok"], err)
+        self.assertEqual(rc, 0)
+        self.assertEqual(d["mode"], "apply")
+        self.assertTrue(os.path.isfile(day_file(self.dir, "2026-07-15")))
+        # Never deletes the source: the user reviews, then removes it themselves.
+        self.assertTrue(os.path.isfile(self.legacy))
+
+    def test_missing_source_refused(self):
+        d, rc, _ = run_cli("migrate", "--from-file",
+                           os.path.join(self.work, "nope.md"), "--dir", self.dir)
+        self.assertFalse(d["ok"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(d["errors"][0]["code"], "LEGACY_NOT_FOUND")
+
+    def test_both_sources_refused(self):
+        d, rc, _ = run_cli("migrate", "--from-file", self.legacy,
+                           "--from-dir", self.work, "--dir", self.dir)
+        self.assertFalse(d["ok"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(d["errors"][0]["code"], "AMBIGUOUS_SOURCE")
 
 
 if __name__ == "__main__":
