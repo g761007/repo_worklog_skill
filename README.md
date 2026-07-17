@@ -30,8 +30,10 @@ git-worklog/                  # the skill (this whole directory is the skill)
 │   ├── paths.py              # user-level state dir ($GIT_WORKLOG_HOME, ~/.git-worklog)
 │   ├── language.py           # BCP 47 resolution; the run's one output language
 │   ├── config.py             # project config.json reader
+│   ├── writer.py             # planning and transactionally writing day files + index.md
+│   ├── preview.py            # the immutable preview record, its state machine and apply lock
 │   ├── analysis/             # the pipeline: history -> manifest -> results (+ worktree)
-│   └── cli/                  # version / doctor / validate / analyze
+│   └── cli/                  # version / doctor / validate / analyze / preview / apply
 ├── scripts/                  # deterministic Python helpers (stdlib only)
 │   ├── resolve_provider_model.py    # resolve per-host provider/model (overrides, escalation, halt-and-ask)
 │   ├── resolve_date_range.py        # date/timezone parsing, day-span cap, per-day bounds
@@ -45,7 +47,6 @@ git-worklog/                  # the skill (this whole directory is the skill)
 │   ├── rebuild_worklog_index.py    # rebuild index.md from day files; preserve index MANUAL
 │   ├── validate_daily_worklog.py   # per-day file marker/title/UTF-8 validation
 │   ├── validate_worklog_index.py   # index marker/order/link/UTF-8 validation
-│   ├── preview_state.py            # multi-file preview fingerprint, apply-time consistency
 │   ├── migrate_legacy_worklog.py   # one-time split of the legacy single file
 │   └── worklog_markers.py          # compatibility shim -> git_worklog.markers
 └── references/               # detailed specs the skill loads on demand
@@ -121,6 +122,8 @@ git-worklog version    # CLI / layout / config-schema versions
 git-worklog doctor     # is this environment able to run the tool?
 git-worklog validate   # is the worklog on disk well-formed?
 git-worklog analyze    # prepare per-day analysis tasks, and collect them back
+git-worklog preview    # freeze what an apply would write
+git-worklog apply      # write a frozen preview
 ```
 
 Without installing, the same commands run straight from the skill folder:
@@ -159,7 +162,29 @@ still call itself complete and verified — so `prepare` marks which files the d
 is answerable for (source only; docs, config, tests, binaries and deletions are
 excused) and `collect` fails any day that leaves one undescribed.
 
-More commands — generation, reports, migration — arrive as the CLI grows; today
+`preview` and `apply` then close the loop:
+
+```bash
+git-worklog preview --run-id <run_id> <<'JSON'
+{"entries": {"2026-07-15": {"generated_markdown": "## 當日摘要\n..."}}}
+JSON
+# → a preview_id. Every target file's *final text* is stored under
+#   ~/.git-worklog/previews/, along with the repository, worklog, run and
+#   language fingerprints it depends on. Nothing is written.
+
+git-worklog apply --preview-id <preview_id>
+# → re-checks all of those, then writes exactly the stored bytes.
+```
+
+A preview id is the only thing `apply` accepts. That is deliberate: the day's
+prose enters once, before the user reads it, and there is no argument through
+which a re-render could reach the disk. If anything moved in between — HEAD, a
+day file, `index.md`, the analysis results, the project's language — apply
+refuses and says which, rather than writing something close enough. Previews
+expire after 24 hours, apply exactly once, and take a per-worklog lock so two of
+them cannot interleave.
+
+More commands — reports, migration, cleanup — arrive as the CLI grows; today
 those live in the skill.
 
 ### Usage
@@ -289,9 +314,17 @@ acceptance-test matrix.
   atomically, with rollback), so a failed run never leaves some days updated and
   others not. The index is written atomically and is always reconstructable from
   the day files.
-- Applies are gated by a multi-file preview fingerprint (repo/branch/HEAD/worktree
-  + index hash + each day-file hash + the directory listing); a stale or
-  already-used preview is refused.
+- **An apply writes the preview, not a reconstruction of it.** The preview record
+  holds the final text of every target file, and `git-worklog apply` takes a
+  preview id and nothing else — so what lands on disk is what was on screen, and
+  no re-render can reach the filesystem.
+- Applies are gated on everything that payload depends on: repository identity,
+  git dir, branch, HEAD, submodules, the working tree (when the run read it),
+  `index.md`, each day file, the directory listing, the analysis run, and the
+  project's language settings. Anything moved, or a preview that is expired,
+  cancelled, failed or already applied, is refused rather than reconciled.
+- Concurrent applies to one worklog are locked out; a lock is broken only when
+  its owner is provably dead.
 - The skill never runs `git add/commit/push/fetch/pull/checkout/switch/merge/rebase`.
 
 ### License
@@ -329,14 +362,18 @@ subagent 分析，所有變更都先以 dry-run 預覽，**經你明確確認後
     - `rebuild_worklog_index.py`：由日期檔重建 index.md、保留索引 MANUAL。
     - `validate_daily_worklog.py`：每日檔案的標記／標題／UTF-8 驗證。
     - `validate_worklog_index.py`：索引標記／排序／連結／UTF-8 驗證。
-    - `preview_state.py`：多檔 preview 指紋、apply 前一致性、防重複套用。
     - `migrate_legacy_worklog.py`：一次性把舊單檔拆成目錄式。
     - `worklog_markers.py`：相容轉接層，實際模組為 `git_worklog.markers`。
   - `git_worklog/`：引擎與 `git-worklog` CLI 本體（僅標準庫）。
     - `__init__.py`：`__version__`——產品版本的單一來源。
     - `markers.py`：日期檔／索引的解析與序列化，即格式的定義。
     - `paths.py`：使用者層級狀態目錄（`$GIT_WORKLOG_HOME`、`~/.git-worklog`）。
-    - `cli/`：`version`／`doctor`／`validate`。
+    - `language.py`：BCP 47 語言解析——一個 run 只有一種輸出語言。
+    - `config.py`：專案 `config.json` 讀取。
+    - `writer.py`：規劃並以交易方式寫入日期檔與 `index.md`。
+    - `preview.py`：不可變的 preview record、其狀態機與 apply 鎖。
+    - `analysis/`：分析流程（history → manifest → results，另有 worktree）。
+    - `cli/`：`version`／`doctor`／`validate`／`analyze`／`preview`／`apply`。
   - `references/`：skill 依需求載入的詳細規格（報告模式、互動流程、日期契約、
     程式碼分析規則、subagent 契約、工作日誌格式、模型設定）。
 - `docs/naming-conventions.md`：品牌、skill、CLI、package 與目錄的正式命名對照。
@@ -396,6 +433,8 @@ git-worklog version    # CLI／佈局／設定 schema 版本
 git-worklog doctor     # 這個環境跑得動嗎？
 git-worklog validate   # 磁碟上的工作日誌格式正確嗎？
 git-worklog analyze    # 建立每日分析任務，再把結果收回來驗證
+git-worklog preview    # 凍結這次 apply 會寫入的全部內容
+git-worklog apply      # 寫入某份已凍結的 preview
 ```
 
 不安裝的話，同樣的指令可直接從 skill 資料夾執行：
@@ -430,7 +469,26 @@ git-worklog analyze collect --run-id <run_id>
 的檔案（只限原始碼；文件、設定、測試、二進位檔與刪除的檔案都豁免），`collect` 則會讓
 任何漏掉的日子失敗。
 
-產生日誌、報告、遷移等指令會隨 CLI 成長陸續加入，目前仍在 skill 內。
+`preview` 與 `apply` 收尾：
+
+```bash
+git-worklog preview --run-id <run_id> <<'JSON'
+{"entries": {"2026-07-15": {"generated_markdown": "## 當日摘要\n..."}}}
+JSON
+# → 回傳 preview_id。每個目標檔案的**最終內容**都存進 ~/.git-worklog/previews/，
+#   連同它所依賴的 repository、worklog、run 與語言指紋。此時不寫入任何檔案。
+
+git-worklog apply --preview-id <preview_id>
+# → 重新驗證上述全部項目，然後寫入「存起來的那份位元組」。
+```
+
+`apply` 只收 preview id，這是刻意的：當天的敘述只在使用者過目之前進入工具一次，之後
+沒有任何參數能讓重新產生的內容抵達磁碟。中間只要有東西動過——HEAD、某個日期檔、
+`index.md`、分析結果、專案語言設定——apply 就會拒絕並指出是哪一項，而不是寫入一份
+「差不多」的內容。Preview 24 小時後過期、只能套用一次，並且會取得 per-worklog 鎖，
+避免兩次 apply 交錯。
+
+報告、遷移、清理等指令會隨 CLI 成長陸續加入，目前仍在 skill 內。
 
 ### 使用方式
 
@@ -509,8 +567,14 @@ skill 會明講並詢問是否先補齊——**絕不默默降級成摘要 commi
 - 每天的 `MANUAL` 區段與索引的 `MANUAL` 區段都逐字保留；只有自動產生區段會被覆蓋。
 - 每日檔案採交易式寫入（所有目標日期一起暫存、驗證、原子替換，失敗即 rollback），
   失敗不會留下「部分日期已更新」的狀態；索引原子寫入，且永遠可由日期檔重建。
-- Apply 前以多檔 preview 指紋把關（repo／branch／HEAD／worktree＋索引雜湊＋各日期檔雜湊＋
-  目錄清單）；過期或已套用的 preview 會被拒絕。
+- **Apply 寫入的就是 preview 本身，不是重新產生的版本。** Preview record 存有每個目標
+  檔案的最終內容，而 `git-worklog apply` 只收一個 preview id——所以落到磁碟上的，就是
+  當初顯示在畫面上的那份，任何重新產生的內容都沒有路徑可以進入檔案系統。
+- Apply 前會重新驗證那份 payload 所依賴的一切：repository identity、git dir、branch、
+  HEAD、submodule、working tree（僅當該 run 有讀取時）、`index.md`、各日期檔、目錄清單、
+  分析 run，以及專案語言設定。只要有任一項變動，或 preview 已過期／已取消／已失敗／
+  已套用，一律拒絕，而不是自行調和。
+- 同一份工作日誌的並行 apply 會被鎖擋下；只有在持有者確定已死時才會破鎖。
 - Skill 絕不執行 `git add/commit/push/fetch/pull/checkout/switch/merge/rebase`。
 
 ### 測試
