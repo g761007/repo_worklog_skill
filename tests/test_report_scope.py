@@ -343,6 +343,81 @@ class TestCoverageCli(unittest.TestCase):
         self.assertEqual(d["errors"][0]["code"], "INVALID_DATE")
 
 
+class TestCoverageResolvesItsOwnRange(unittest.TestCase):
+    """coverage takes a range, so report mode has no date step of its own.
+
+    A date scope is a span and resolves through the same contract generation mode
+    uses; a ref scope is whatever days a tag's commits landed on — a set with
+    gaps — and still arrives as an explicit --dates list. Both forms exist
+    because both have a real caller.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo = make_multi_author_repo()
+
+    @classmethod
+    def tearDownClass(cls):
+        rmtree(cls.repo)
+
+    def test_range_resolves_to_the_same_days_as_an_explicit_list(self):
+        a, _, err = run_cli("coverage", "--from", "2026-08-01", "--to", "2026-08-02",
+                            "--repo", self.repo, *TPE)
+        b, _, _ = run_cli("coverage", "--dates", "2026-08-01,2026-08-02",
+                          "--repo", self.repo, *TPE)
+        self.assertTrue(a["ok"], err)
+        self.assertEqual([r["date"] for r in a["dates"]],
+                         [r["date"] for r in b["dates"]])
+        self.assertEqual([r["status"] for r in a["dates"]],
+                         [r["status"] for r in b["dates"]])
+
+    def test_shortcut_works(self):
+        d, _, err = run_cli("coverage", "2d", "--repo", self.repo, *TPE,
+                            "--today", "2026-08-02")
+        self.assertTrue(d["ok"], err)
+        self.assertEqual([r["date"] for r in d["dates"]],
+                         ["2026-08-01", "2026-08-02"])
+
+    def test_report_mode_reads_further_back_than_generation_writes(self):
+        """90 days, not 30. The 30-day cap bounds per-day subagent cost, and
+        report mode spawns none — it only reads day files that already exist.
+        """
+        d, _, err = run_cli("coverage", "--from", "2026-05-04", "--to", "2026-08-01",
+                            "--repo", self.repo, *TPE)
+        self.assertTrue(d["ok"], err)      # 90 days exactly
+        self.assertEqual(len(d["dates"]), 90)
+
+    def test_the_raised_cap_is_still_a_cap(self):
+        d, rc, _ = run_cli("coverage", "--from", "2026-05-03", "--to", "2026-08-01",
+                           "--repo", self.repo, *TPE)
+        self.assertFalse(d["ok"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(d["errors"][0]["code"], "TOO_MANY_DAYS")
+        self.assertEqual(d["errors"][0]["requested_days"], 91)
+        self.assertEqual(d["errors"][0]["max_days"], 90)
+
+    def test_a_list_and_a_range_together_are_refused(self):
+        # They mean different things; ranking them silently would pick one.
+        d, rc, _ = run_cli("coverage", "3d", "--dates", "2026-08-01",
+                           "--repo", self.repo, *TPE)
+        self.assertFalse(d["ok"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(d["errors"][0]["code"], "ARG_CONFLICT")
+
+    def test_neither_form_is_refused(self):
+        d, rc, _ = run_cli("coverage", "--repo", self.repo, *TPE)
+        self.assertFalse(d["ok"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(d["errors"][0]["code"], "NO_DATE_SPEC")
+
+    def test_timezone_source_is_reported(self):
+        d, _, err = run_cli("coverage", "--date", "2026-08-01", "--repo", self.repo,
+                            "--timezone", "Asia/Taipei")
+        self.assertTrue(d["ok"], err)
+        self.assertEqual(d["timezone"]["resolved"], "Asia/Taipei")
+        self.assertEqual(d["timezone"]["source"], "explicit")
+
+
 class TestRefsCli(unittest.TestCase):
     """`git-worklog refs` — the CLI over the same ref resolver."""
 

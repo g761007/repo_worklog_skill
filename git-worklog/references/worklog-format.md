@@ -21,12 +21,12 @@ is rebuilt from the day files and is pure navigation. This replaces the earlier
 single `docs/PROJECT_WORKLOG.md`, which grew without bound, produced huge diffs,
 and forced a full re-read on every update.
 
-The format is enforced mechanically. `scripts/worklog_markers.py` is the single
-source of truth for parsing and serialising both shapes;
-`update_daily_worklog.py`, `rebuild_worklog_index.py`, `validate_daily_worklog.py`
-and `validate_worklog_index.py` all build on it. When this document and the
-scripts appear to disagree, the scripts win — they were written to match this
-spec exactly, so any disagreement is a bug to report, not work around.
+The format is enforced mechanically. `git_worklog/markers.py` is the single
+source of truth for parsing and serialising both shapes; every command that reads
+or writes a worklog — `apply`, `reindex`, `validate`, `migrate` — builds on it,
+which is why none of them can disagree about what the format is. When this
+document and the code appear to disagree, the code wins — it was written to match
+this spec exactly, so any disagreement is a bug to report, not work around.
 
 ---
 
@@ -48,8 +48,8 @@ in the worklog files.
 .git-worklog/days/<date>.md   # <date> is an ISO YYYY-MM-DD calendar date
 ```
 
-Override the directory with `update_daily_worklog.py --dir` /
-`rebuild_worklog_index.py --dir`. If `.git-worklog/` does not exist:
+Override the directory with `--dir` on any command that reads or writes it.
+If `.git-worklog/` does not exist:
 
 - **dry-run must NOT create it.** A preview never touches the filesystem — no
   directory, no file. The dry-run output reports `dir_exists` so the preview can
@@ -209,10 +209,10 @@ placeholders. The template lists what is *available*, not what is *mandatory*.
 
 Because parsing is line-based, the generated body must **not** contain a line that
 is itself a `GIT_WORKLOG` marker (e.g. a summary quoting the tool's own
-`<!-- GIT_WORKLOG:…:MANUAL:START -->` on its own line). `update_daily_worklog.py`
+`<!-- GIT_WORKLOG:…:MANUAL:START -->` on its own line). `apply`
 refuses such input up front with `GENERATED_CONTAINS_MARKER`; rephrase or inline
 the reference rather than leaving it as a bare marker line. (The same guard makes
-`migrate_legacy_worklog.py` refuse a legacy block whose generated text carries a
+`migrate` refuse a legacy block whose generated text carries a
 bare marker line, rather than emit a corrupt day file.)
 
 ---
@@ -265,7 +265,7 @@ INDEX MANUAL region is human-owned.
 
 ## 5. Create, overwrite, and no-change
 
-`update_daily_worklog.py` takes `{date: {generated_markdown}}` plus `meta`
+The writer takes `{date: {generated_markdown}}` plus `meta`
 (`timezone`, `branch`, `head`) and, for each target date, does one of:
 
 ### New date — create
@@ -298,7 +298,7 @@ is `no_change` and the file is left untouched (it is not rewritten).
 
 ### The index follows
 
-After the day files are written, `rebuild_worklog_index.py` rebuilds `index.md`
+After the day files are written, `apply` rebuilds `index.md`
 from the day files on disk (preserving INDEX MANUAL). In a dry-run, pass the
 pending day summaries as `{"overrides": {...}}` so the index preview reflects the
 about-to-be-written state without touching disk.
@@ -322,12 +322,12 @@ about-to-be-written state without touching disk.
 
 An apply must never leave some days updated and others not.
 
-- `update_daily_worklog.py --apply` writes **all** target day files as one
+- `apply` writes **all** target day files as one
   transaction: each new file is staged to a same-directory temp file and
   validated, then swapped in with `os.replace`; if any stage or swap fails, every
   already-swapped file is rolled back (originals restored, newly-created files
   removed). Either all target day files reach their new state or none do.
-- `rebuild_worklog_index.py --apply` writes `index.md` atomically (temp file,
+- the index is written atomically (temp file,
   re-parsed, `os.replace`). The index is a **pure function of the day files**, so
   if the index write ever fails after the day files succeed, the day files are
   already consistent and re-running the index rebuild repairs it with no data
@@ -338,17 +338,17 @@ An apply must never leave some days updated and others not.
 
 ## 8. Validation
 
-`validate_daily_worklog.py` checks each day file: filename is a valid
+`validate` checks each day file: filename is a valid
 `<date>.md`, the `# Project Worklog — <date>` title matches, GENERATED and MANUAL
 regions are present, unique and correctly ordered, every marker's date matches
-the file's date, and the file is UTF-8. `validate_worklog_index.py` checks the
+the file's date, and the file is UTF-8. It also checks the
 index: INDEX GENERATED/MANUAL present and unique, dates unique and descending,
 every linked day file exists, and UTF-8. Both report **every** issue in one pass.
 
 **Corrupt markers are refused, never auto-repaired.** If a target day file has
-missing or corrupt markers, `update_daily_worklog.py` aborts with
+missing or corrupt markers, `apply` aborts with
 `CORRUPT_MARKERS` rather than guess which text was human-written. A corrupt
-existing `index.md` aborts `rebuild_worklog_index.py` with `INDEX_CORRUPT_MARKERS`
+existing `index.md` aborts the index rebuild with `INDEX_CORRUPT_MARKERS`
 so its MANUAL region is never discarded.
 
 ### Fatal issues
@@ -371,7 +371,7 @@ fixes both — so they are surfaced but do not block.
 ## 9. Migration from the legacy single file
 
 A project that already has `docs/PROJECT_WORKLOG.md` is migrated with
-`scripts/migrate_legacy_worklog.py` (or `/git-worklog migrate`), never
+`python3 -m git_worklog migrate` (or `/git-worklog migrate`), never
 automatically. It reads the legacy file, splits each date into
 `.git-worklog/days/<date>.md` preserving that date's GENERATED and MANUAL text,
 and builds `index.md`. It is dry-run by default, **never deletes** the legacy

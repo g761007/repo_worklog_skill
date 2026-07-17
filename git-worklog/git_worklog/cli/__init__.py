@@ -176,14 +176,37 @@ def build_parser() -> argparse.ArgumentParser:
 
     cov = sub.add_parser("coverage",
                          help="Which dates have a worklog behind them (report mode).")
-    cov.add_argument("--dates", required=True, metavar="LIST",
-                     help="Comma-separated ISO dates, e.g. 2026-07-01,2026-07-02.")
+    # Two ways in, because report mode has two scopes: a date scope is a range,
+    # a ref scope is whatever days a tag's commits landed on — an arbitrary set.
+    cov.add_argument("shortcut", nargs="?", metavar="SHORTCUT",
+                     help="Date shortcut: NNd or a bare YYYY-MM-DD.")
+    cov.add_argument("--date", metavar="DATE", help="A single day (YYYY-MM-DD).")
+    cov.add_argument("--days", type=int, metavar="N",
+                     help="The last N calendar days, including today.")
+    cov.add_argument("--from", metavar="DATE", help="Range start (inclusive).")
+    cov.add_argument("--to", metavar="DATE", help="Range end (inclusive).")
+    cov.add_argument("--dates", metavar="LIST",
+                     help="Exact days as a comma-separated list, e.g. "
+                          "2026-07-01,2026-07-02. For a ref scope, whose dates "
+                          "are a set with gaps rather than a span.")
+    cov.add_argument("--today", metavar="DATE",
+                     help="Override today's date for deterministic runs.")
+    # Defaulted by the engine, not here: naming the number would mean importing
+    # analysis.coverage (and history, and Git) to build a parser that `version`
+    # also uses. Same reason as --ttl-seconds below.
+    cov.add_argument("--max-days", type=int, default=None,
+                     help="Maximum span in calendar days (default: 90). Higher "
+                          "than generation's 30: report mode reads day files and "
+                          "spawns no subagents, so the cost that cap bounds is "
+                          "not at stake.")
     cov.add_argument("--repo", default=".", help="Repository to read (default: cwd).")
     cov.add_argument("--dir", default=wm.WORKLOG_DIRNAME,
                      help="Worklog directory, absolute or relative to the repo "
                           f"root (default: {wm.WORKLOG_DIRNAME}).")
-    cov.add_argument("--timezone", default="UTC",
-                     help="IANA timezone deciding each day's bounds (default: UTC).")
+    cov.add_argument("--timezone", default=None,
+                     help="IANA timezone deciding each day's bounds. Detected "
+                          "from the environment when omitted; with --dates it "
+                          "defaults to UTC.")
     cov.add_argument("--date-field", choices=["committer", "author"],
                      default="committer",
                      help="Which date decides day attribution (default: committer).")
@@ -222,6 +245,17 @@ def build_parser() -> argparse.ArgumentParser:
                          "--from-dir, whose day files already record their own.")
     mg.add_argument("--apply", action="store_true",
                     help="Write the migration. Without this the run is a dry-run.")
+
+    ri = sub.add_parser("reindex",
+                        help="Rebuild index.md from the day files (dry-run by "
+                             "default). The repair for INDEX_WRITE_FAILED.")
+    ri.add_argument("--dir", help=f"Worklog directory (default: "
+                                  f"{wm.WORKLOG_DIRNAME}).")
+    ri.add_argument("--language", default=None,
+                    help="Language for the index, used only when it does not "
+                         "exist yet. An index that already has one keeps it.")
+    ri.add_argument("--apply", action="store_true",
+                    help="Write index.md. Without this the run is a dry-run.")
     return p
 
 
@@ -255,6 +289,8 @@ def main(argv: "list[str] | None" = None) -> int:
         from git_worklog.cli import refs as cmd
     elif args.command == "migrate":
         from git_worklog.cli import migrate as cmd
+    elif args.command == "reindex":
+        from git_worklog.cli import reindex as cmd
     else:
         raise AssertionError(f"no module wired for command {args.command!r}")
 

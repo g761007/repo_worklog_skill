@@ -1,8 +1,8 @@
 # Provider Models
 
 Per-host subagent model selection for the `git-worklog` skill. The **single
-source of truth** is `git_worklog/data/provider_models.json`; this document is its
-human-facing mirror. Never add a second place that stores model ids — update the
+source of truth** is `git_worklog/data/provider_models.json`; this document is
+its human-facing mirror. Never add a second place that stores model ids — update the
 JSON and this file only.
 
 The skill runs under one of three hosts. Each host has one provider key and one
@@ -32,20 +32,23 @@ and the manifest.
   it (see below) rather than editing multiple files — a wrong `model_id` must
   surface as an unavailable model, never as a silent fallback.
 
-## Resolving the model (single command)
+## Resolving the model (nothing to resolve)
 
-The orchestrator resolves the model with one deterministic script and threads its
-`model` object through the pipeline:
+The orchestrator does not resolve the model at all. It names the host it is
+running under, and `analyze prepare` does the rest:
 
 ```text
-scripts/resolve_provider_model.py --host <anthropic|openai|google>
-  -> { provider, model:{display_name, model_id[, reasoning_effort]}, ... }
-  -> analyze prepare --provider <key> --model-json '<model>'
-  -> spawn every Day / Code-Analysis subagent on that model
+analyze prepare <range> --host <anthropic|openai|google>
+  -> reads git_worklog/data/provider_models.json
+  -> applies the override precedence below
+  -> reports { provider, model:{display_name, model_id[, reasoning_effort]} }
+  -> stamps both on every day's manifest
+  -> every Day / Code-Analysis subagent for the run runs on that model
 ```
 
-The resolved `provider` and `model` land in each day's analysis manifest, so
-every subagent for the run executes on the same model.
+There is no separate resolve step to forget, and no model object to carry
+between two commands and get wrong. Read `provider` and `model` back off
+prepare's output when you need to show the user which model the run will use.
 
 ## Host selection — never guessed
 
@@ -56,7 +59,7 @@ skill is executing under (Claude Code → `anthropic`, Codex → `openai`, Gemin
 - Only that one provider's entry is used. The three providers are **never** all
   passed to a subagent at once.
 - The provider is **never** inferred from a model name.
-- If the host cannot be determined, `resolve_provider_model.py` returns an
+- If the host cannot be determined, `analyze prepare --host` returns an
   `UNKNOWN_HOST` error and the skill **stops and reports a configuration error**.
   It never defaults to the first provider.
 
@@ -144,6 +147,6 @@ Rules (`escalation_policy.automatic` is fixed to `false`):
   evidence, unresolved merge result, unclear revert final state, or unreadable
   required code context.
 - Escalation runs only after the user explicitly approves. The approved day(s) are
-  re-analysed with `resolve_provider_model.py --host <key> --escalate`, which
-  mints a **new** dry-run and a **new `preview_id`**. The original preview is
-  never edited in place.
+  re-analysed with `analyze prepare --host <key> --escalate`, which mints a
+  **new** dry-run and a **new `preview_id`**. The original preview is never
+  edited in place.

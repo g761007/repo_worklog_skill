@@ -10,7 +10,7 @@ it tell you what actually changed. When they disagree, the code wins.
 
 ---
 
-## 1. What you already have (from `collect_git_history.py`)
+## 1. What you already have (from your manifest)
 
 The collector has already run for your day and handed you a JSON object with the
 day's commits. **You do not recompute any of this** — treat it as your index into
@@ -258,9 +258,9 @@ inside it — say it was not analyzed and lower confidence accordingly.
 
 ### 6.8 Self-referential worklog commits
 
-`collect_git_history.py` already drops commits that touch **only** the worklog
-output directory (`.git-worklog/` by default — the `WORKLOG_DIRNAME` constant
-in `worklog_markers.py`) before you ever see them: e.g. a
+The collector already drops commits that touch **only** the worklog output
+directory (`.git-worklog/` by default — the `WORKLOG_DIRNAME` constant in
+`git_worklog/markers.py`) before you ever see them: e.g. a
 `chore(docs): 補充 XX 專案工作日誌` commit that only edits day files and
 `index.md`. Such a commit never appears in `commits[]`, is never counted in
 `commit_count`, and cannot make a day `has_changes:true` on its own. A commit

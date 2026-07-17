@@ -23,7 +23,7 @@ sees and every decision that spans more than one day:
 
 - user interaction and confirmation,
 - natural-language parsing into canonical parameters,
-- date validation (`resolve_date_range.py`),
+- date validation (`analyze prepare`),
 - per-day task splitting (one Day Subagent per date),
 - subagent dispatch and provider/model selection,
 - minting the run and handing each subagent its manifest and output path
@@ -130,8 +130,8 @@ Author **emails are deliberately absent** from the manifest. The worklog is
 human-facing prose; emails add PII noise and no narrative value. Do not fetch
 them separately.
 
-**Self-referential worklog commits are already excluded.** `collect_git_history.py`
-drops any commit whose changed files fall entirely inside the worklog output
+**Self-referential worklog commits are already excluded.** The collector drops
+any commit whose changed files fall entirely inside the worklog output
 directory (`.git-worklog/` by default) before the manifest is built — see
 `references/code-analysis-rules.md` §6.8. A day whose only commits were worklog
 output arrives with `commits: []`, `commit_count: 0`, and `has_changes: false`,
@@ -170,10 +170,10 @@ claim that the file was part of the work you are describing.
 
 ## 4. Provider / model per host
 
-The orchestrator resolves the model with `scripts/resolve_provider_model.py
---host <key>` and sets `provider` and `model` on the manifest from its output.
-Defaults are cost-first; the host is never guessed. Full rules (overrides, env
-vars, unavailable-model halt, escalation) are in `references/provider-models.md`.
+The orchestrator passes `analyze prepare --host <key>`, which resolves the model
+and stamps `provider` and `model` on every manifest in the run. Defaults are
+cost-first; the host is never guessed. Full rules (overrides, env vars,
+unavailable-model halt, escalation) are in `references/provider-models.md`.
 
 | Host | `provider` | default `model` (`model_id`) |
 |------|-----------|------------------------------|

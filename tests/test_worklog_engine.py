@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from helpers import SCRIPTS, run_script, rmtree, day_file
+from helpers import SCRIPTS, run_cli, run_script, rmtree, day_file
 
 sys.path.insert(0, SCRIPTS)
 import worklog_markers as wm  # noqa: E402
@@ -746,6 +746,95 @@ class TestLegacyLayoutIsReadableButNotWritable(unittest.TestCase):
         self.assertEqual(d["errors"][0]["code"], "LEGACY_LAYOUT")
         self.assertEqual(rc, 2)
         self.assertFalse(os.path.exists(wm.days_dir(self.dir, wm.LAYOUT_CURRENT)))
+
+
+class TestReindexCli(unittest.TestCase):
+    """`git-worklog reindex` — the repair path for INDEX_WRITE_FAILED.
+
+    That error means the day files landed and index.md did not. It is only
+    survivable because the index is a pure function of the day files, so what
+    these hold is exactly that: given the days, the index can be rebuilt from
+    nothing, and rebuilding it does not cost the human's notes.
+    """
+
+    def setUp(self):
+        self.work = tempfile.mkdtemp(prefix="rw_reidx_")
+        self.dir = os.path.join(self.work, wm.WORKLOG_DIRNAME)
+        run_script("update_daily_worklog.py", ["--dir", self.dir, "--apply"],
+                   stdin=day_entries({
+                       "2026-07-15": "## 當日摘要\n\n新增快取層",
+                       "2026-07-16": "## 當日摘要\n\n修正快取鍵",
+                   }))
+        # Writing day files does not write the index — that is the whole reason
+        # INDEX_WRITE_FAILED can happen. Build one so these start from a worklog
+        # that is intact, and then break it deliberately.
+        run_cli("reindex", "--dir", self.dir, "--apply")
+
+    def tearDown(self):
+        rmtree(self.work)
+
+    def _index(self) -> str:
+        with open(wm.index_path(self.dir), encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_dry_run_writes_nothing(self):
+        os.remove(wm.index_path(self.dir))
+        d, rc, err = run_cli("reindex", "--dir", self.dir)
+        self.assertTrue(d["ok"], err)
+        self.assertEqual(rc, 0)
+        self.assertEqual(d["mode"], "dry-run")
+        self.assertFalse(os.path.exists(wm.index_path(self.dir)))
+
+    def test_rebuilds_a_missing_index_from_the_day_files(self):
+        # Exactly the INDEX_WRITE_FAILED state: days on disk, no index.
+        os.remove(wm.index_path(self.dir))
+        d, rc, err = run_cli("reindex", "--dir", self.dir, "--apply")
+        self.assertTrue(d["ok"], err)
+        self.assertEqual(rc, 0)
+        self.assertEqual(d["dates"], ["2026-07-16", "2026-07-15"])
+        index = self._index()
+        self.assertIn("新增快取層", index)
+        self.assertIn("修正快取鍵", index)
+
+    def test_rebuilding_keeps_the_index_manual_region(self):
+        note = "手寫的導覽備註"
+        doc = wm.parse_index(self._index())
+        with open(wm.index_path(self.dir), "w", encoding="utf-8") as fh:
+            # The trailing newline matters: manual_inner is concatenated raw, so
+            # without it the END marker lands on the same line as the text and
+            # the region no longer parses.
+            fh.write(wm.render_index(list(doc.rows), note + "\n",
+                                     wm.LAYOUT_CURRENT))
+        d, _, err = run_cli("reindex", "--dir", self.dir, "--apply")
+        self.assertTrue(d["ok"], err)
+        self.assertTrue(d["preserved_index_manual"])
+        self.assertIn(note, self._index())
+
+    def test_a_corrupt_index_is_refused_rather_than_overwritten(self):
+        """Rebuilding must not be a way to lose the MANUAL region.
+
+        The index is derivable, but the human's notes in it are not. When the
+        markers no longer parse, the notes cannot be located to carry across, so
+        the only safe move is to stop.
+        """
+        with open(wm.index_path(self.dir), "w", encoding="utf-8") as fh:
+            fh.write("# Project Worklog\n\n<!-- GIT_WORKLOG:INDEX:MANUAL:START -->\n"
+                     "半截的備註，沒有結尾標記\n")
+        d, rc, _ = run_cli("reindex", "--dir", self.dir, "--apply")
+        self.assertFalse(d["ok"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(d["errors"][0]["code"], "INDEX_CORRUPT_MARKERS")
+        self.assertIn("半截的備註", self._index())   # untouched
+
+    def test_an_unchanged_index_reports_no_change(self):
+        d, _, err = run_cli("reindex", "--dir", self.dir)
+        self.assertTrue(d["ok"], err)
+        self.assertEqual(d["action"], "no_change")
+
+    def test_missing_directory_is_an_error_not_an_empty_index(self):
+        d, rc, _ = run_cli("reindex", "--dir", os.path.join(self.work, "nope"))
+        self.assertFalse(d["ok"])
+        self.assertEqual(rc, 2)
 
 
 if __name__ == "__main__":
