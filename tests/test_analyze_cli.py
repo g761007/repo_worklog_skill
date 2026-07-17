@@ -813,5 +813,119 @@ class TestIncludeUncommitted(_Run):
             os.remove(os.path.join(_REPO, "src", "scratch.py"))
 
 
+class TestLargeDay(_Run):
+    """A day too big for one subagent must be visible before dispatch (#22).
+
+    `large_day` was on the manifest all along, but as advice with no consequence:
+    nothing surfaced it as a decision, and the escalation signal came back from
+    the subagent — the party least able to notice it was overwhelmed. prepare now
+    sizes the day and warns, carrying the counts so a 60-file day reads
+    differently from a 26-file one.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        # One commit that changes 30 files: over the 25-file threshold, so
+        # large_day is true without needing a sprawling fixture.
+        cls.repo = tempfile.mkdtemp(prefix="rw_big_")
+        _git(cls.repo, "init", "-q", "-b", "main")
+        _git(cls.repo, "config", "user.email", "t@example.com")
+        _git(cls.repo, "config", "user.name", "Tester")
+        _git(cls.repo, "config", "commit.gpgsign", "false")
+        for i in range(30):
+            _write(cls.repo, f"src/mod_{i:02d}.py", f"def f{i}():\n    return {i}\n")
+        _git(cls.repo, "add", "-A")
+        _git(cls.repo, "commit", "-q", "-m", "big day",
+             env={"GIT_AUTHOR_DATE": "2026-07-15T10:00:00+08:00",
+                  "GIT_COMMITTER_DATE": "2026-07-15T10:00:00+08:00"})
+
+    @classmethod
+    def tearDownClass(cls):
+        rmtree(cls.repo)
+
+    def _prepare_big(self, *extra):
+        return run_cli("analyze", "prepare", "--repo", self.repo,
+                       "--from", "2026-07-15", "--to", "2026-07-15",
+                       "--timezone", _TZ, "--language", "en",
+                       "--language-source", "user-request", *extra, env=self.env)
+
+    def test_a_large_day_warns_before_dispatch(self):
+        d, rc, err = self._prepare_big()
+        self.assertTrue(d["ok"], err)
+        self.assertEqual(rc, 0)  # a warning, not a refusal — nothing is blocked
+        large = [w for w in d.get("warnings", []) if w["code"] == "LARGE_DAY"]
+        self.assertEqual(len(large), 1)
+        self.assertEqual(large[0]["date"], "2026-07-15")
+        self.assertEqual(large[0]["changed_file_count"], 30)
+        self.assertGreater(large[0]["recommended_code_analysis_subagents"], 0)
+
+    def test_the_task_carries_the_counts_not_just_the_boolean(self):
+        # The whole complaint in #22: a boolean flattens 60 files and 26 files
+        # into the same signal. The counts are what let the reader tell them
+        # apart.
+        d, _, _ = self._prepare_big()
+        t = d["tasks"][0]
+        self.assertTrue(t["large_day"])
+        self.assertEqual(t["changed_file_count"], 30)
+        self.assertGreaterEqual(t["group_count"], 1)
+
+    def test_the_warning_names_the_resolved_model(self):
+        # The point of sizing at prepare time is that it knows the model before
+        # dispatch. A warning that did not name it could not be reasoned about.
+        d, _, _ = self._prepare_big("--host", "anthropic")
+        large = [w for w in d["warnings"] if w["code"] == "LARGE_DAY"][0]
+        self.assertIn("claude-haiku-4-5", large["message"])
+
+    def test_a_small_day_does_not_warn(self):
+        # The check must stay quiet on ordinary days, or its warning means
+        # nothing. _REPO is the module's 4-file fixture.
+        d, _, err = run_cli("analyze", "prepare", "--repo", _REPO, *_DAY_ARGS,
+                            "--language", "en", "--language-source",
+                            "user-request", env=self.env)
+        self.assertTrue(d["ok"], err)
+        self.assertEqual([w for w in d.get("warnings", [])
+                          if w["code"] == "LARGE_DAY"], [])
+        self.assertFalse(d["tasks"][0]["large_day"])
+
+
+class TestLargeDayHelpers(unittest.TestCase):
+    """The warning-builder and model-labeller, as units."""
+
+    def setUp(self):
+        import sys
+        from helpers import SKILL_ROOT
+        if SKILL_ROOT not in sys.path:
+            sys.path.insert(0, SKILL_ROOT)
+        from git_worklog.cli import analyze
+        self.analyze = analyze
+
+    def _manifest(self, **over):
+        m = {"large_day": True, "commit_count": 28,
+             "changed_files": [{}] * 60, "file_groups": [{}] * 9,
+             "recommended_code_analysis_subagents": 9}
+        m.update(over)
+        return m
+
+    def test_no_warning_for_a_day_that_is_not_large(self):
+        self.assertIsNone(self.analyze._large_day_warning(
+            "2026-07-15", self._manifest(large_day=False), "haiku"))
+
+    def test_warning_carries_the_three_counts(self):
+        w = self.analyze._large_day_warning("2026-07-15", self._manifest(), "haiku")
+        self.assertEqual((w["commit_count"], w["changed_file_count"],
+                          w["group_count"]), (28, 60, 9))
+
+    def test_model_label_uses_the_model_id_when_resolved(self):
+        self.assertEqual(
+            self.analyze._model_label({"model_id": "claude-haiku-4-5"}, "anthropic"),
+            "claude-haiku-4-5")
+
+    def test_model_label_names_the_provider_default_when_unresolved(self):
+        # model is null when no --host resolved one; the warning still has to say
+        # which model the day would run on, so it names the provider's default.
+        self.assertEqual(self.analyze._model_label(None, "anthropic"),
+                         "the default anthropic model")
+
+
 if __name__ == "__main__":
     unittest.main()

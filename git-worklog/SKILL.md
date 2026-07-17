@@ -239,6 +239,16 @@ summary:
 - `warnings[]` — surface these; do not swallow them. `DEPRECATED_ENV_VAR` means
   an old variable name chose the model, and the user should know which knob did
   it. `UNCOMMITTED_NOT_IN_RANGE` means their uncommitted work had nowhere to go.
+  `LARGE_DAY` means a day is big enough that one subagent on the resolved model
+  may not hold it — the warning carries the commit, file and group counts and the
+  model. **Before dispatching that day, stop and ask**, the same way you do for a
+  gap or an over-30-day range: offer to fan it out into the recommended Code
+  Analysis Subagents (below), to escalate the model (`--host … --escalate`, redo
+  `prepare`), or to proceed as-is. Do not decide silently — a large day that ran
+  anyway on the cheap model is exactly the run that came back confidently wrong
+  and nothing noticed. The counts are there so a 60-file day and a 26-file one
+  are not the same question; proceeding is a legitimate answer, an unasked
+  question is not.
 
 On `ok:false`, report the error and stop. Common codes: `TOO_MANY_DAYS` (show
 `requested_days`, ask to narrow), `NO_DATE_SPEC`, `ARG_CONFLICT`,

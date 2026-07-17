@@ -8,6 +8,24 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`prepare` sizes the day and asks before dispatch** (#22). `large_day` had
+  been on the manifest all along, but as advice with no consequence: nothing
+  surfaced it as a decision, and `escalation_recommended` came back *from* the
+  subagent — the party least able to notice it was drowning. A real 28-commit,
+  60-file day took six correction rounds on the cheap model and never converged,
+  while every signal read green.
+
+  `prepare` now emits a `LARGE_DAY` warning for each oversized day, carrying the
+  commit / changed-file / group counts and the resolved model, and each task
+  carries `changed_file_count` and `group_count` beside the `large_day` boolean.
+  The counts are the point: a 60-file day and a 26-file day are both `large_day`
+  and are not the same dispatch decision, and the fix for that is to show the
+  numbers, not to invent a second threshold. The orchestrator turns the warning
+  into a choice — fan out, escalate the model, or proceed — the same
+  surface-and-ask the over-30-day and gap prompts already use. Nothing is
+  refused; the signal simply stops depending on the overwhelmed subagent to
+  raise it.
+
 - **The prose is verified, not just `evidence[]`** (#19). The worklog is written
   from `implementation`, `behavior_change`, `impact` and the other prose fields,
   and nothing checked them: `analyze collect` validated every `evidence[]` entry

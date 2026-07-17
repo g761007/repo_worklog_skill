@@ -71,6 +71,55 @@ def _resolve_model(args) -> "tuple[str, dict, list]":
     return resolved["provider"], resolved["model"], list(resolved.get("warnings", []))
 
 
+def _model_label(model: "dict | None", provider: str) -> str:
+    """Name the resolved model for a human-facing warning.
+
+    ``model`` is null when no ``--host`` resolved one -- the run uses the
+    provider's default, which is exactly the case a large-day warning most needs
+    to name, so it says so rather than leaving a blank.
+    """
+    if isinstance(model, dict) and model.get("model_id"):
+        return model["model_id"]
+    return f"the default {provider} model"
+
+
+def _large_day_warning(date: str, manifest: dict, label: str) -> "dict | None":
+    """Surface a day too big for one subagent, before it is dispatched.
+
+    ``large_day`` has been on the manifest all along, but as advice with no
+    consequence: nothing sized the day against the model it was about to be given
+    to, and ``escalation_recommended`` came back *from* the subagent -- the party
+    least able to notice it was overwhelmed (#22). This moves the signal to
+    prepare, which knows the commit count, the file count and the model before
+    dispatch and needs no one's opinion to see the day is large.
+
+    It surfaces the counts, not a verdict: a 60-file day and a 26-file day are
+    both ``large_day`` yet not the same problem, and the fix for that is to show
+    the numbers, not to invent a second threshold. The orchestrator turns this
+    into a choice -- fan out, escalate, or proceed (SKILL.md) -- exactly as the
+    over-30-day and gap prompts do. Proceeding is allowed; nothing is refused.
+    """
+    if not manifest["large_day"]:
+        return None
+    files = len(manifest["changed_files"])
+    groups = len(manifest["file_groups"])
+    fan = manifest["recommended_code_analysis_subagents"]
+    return {
+        "code": "LARGE_DAY",
+        "date": date,
+        "message": (
+            f"{date} is a large day: {manifest['commit_count']} commit(s), "
+            f"{files} changed file(s) in {groups} group(s), on {label}. One "
+            f"subagent may not hold it — consider fanning out into the {fan} "
+            f"recommended Code Analysis Subagents, or escalating the model, "
+            f"before dispatching. Proceeding as-is is allowed."),
+        "commit_count": manifest["commit_count"],
+        "changed_file_count": files,
+        "group_count": groups,
+        "recommended_code_analysis_subagents": fan,
+    }
+
+
 def _prepare(args) -> "tuple[dict, int]":
     # One date contract, not a second one written out here. dates.resolve()
     # accepts every form the user can give (7d / --days / --date / --from+--to),
@@ -109,7 +158,9 @@ def _prepare(args) -> "tuple[dict, int]":
     today = resolved["today"]
     worktree = aw.inspect(args.repo) if args.include_uncommitted else None
 
+    model_label = _model_label(model, provider)
     tasks = []
+    large_day_warnings = []
     for date in dates:
         start, end = windows[date]
         history = ah.collect(
@@ -134,9 +185,18 @@ def _prepare(args) -> "tuple[dict, int]":
             "result_path": result_path,
             "has_changes": manifest["has_changes"],
             "commit_count": manifest["commit_count"],
+            # The counts, not just the boolean: a 60-file day and a 26-file day
+            # are both large_day and are not the same dispatch decision (#22).
+            # The recommended fan-out count is a large-day mechanic, so it rides
+            # the LARGE_DAY warning and the manifest, not this per-day summary.
+            "changed_file_count": len(manifest["changed_files"]),
+            "group_count": len(manifest["file_groups"]),
             "large_day": manifest["large_day"],
             "include_uncommitted": bool(day_worktree),
         })
+        warning = _large_day_warning(date, manifest, model_label)
+        if warning:
+            large_day_warnings.append(warning)
 
     payload = {
         "ok": True,
@@ -160,7 +220,7 @@ def _prepare(args) -> "tuple[dict, int]":
     }
     if worktree:
         payload["worktree_fingerprint"] = worktree["worktree_fingerprint"]
-    warnings = list(lang.warnings) + model_warnings
+    warnings = list(lang.warnings) + model_warnings + large_day_warnings
     if worktree and today not in dates:
         # Asked for uncommitted work on a range that does not contain today, so
         # there is nowhere to put it. Silence here would read as "the worktree
