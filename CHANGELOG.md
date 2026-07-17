@@ -8,6 +8,32 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`git-worklog analyze prepare` / `analyze collect`** (#5) — the two commands
+  that bracket an analysis without performing it. `prepare` mints a run and
+  writes one Analysis Manifest per day under
+  `~/.git-worklog/analysis/<run_id>/tasks/`, each naming the `result_path` its
+  analysis must be written to; `collect` reads the results back and checks that
+  every prepared day arrived, that none drifted language, and that every
+  evidence citation resolves against the tree of the commit it names.
+
+  Between them sits the hosting agent's LLM, which is the only part that reads
+  code and writes prose — so the CLI still needs no model API key. `collect`
+  takes its dates from the *tasks*, never from its command line: a
+  caller-supplied date list would let a day be dropped from a run just by
+  omitting it from the second command, which is the exact failure `missing`
+  exists to report. A result nobody asked for is reported as `unknown` and
+  blocks the run rather than being merged as a day that was never prepared.
+
+  Manifests now carry the roadmap §8 fields: `schema_version`, `run_id`,
+  `repository` (including `git_dir`, which is not `root/.git` in a worktree),
+  `result_path`, and `analysis_rules` — the rules travel on the manifest
+  because the manifest is what actually reaches the model, and a rule stated
+  only in prose is a rule that is not enforced.
+
+  The skill still drives the pipeline through `scripts/`; switching it over to
+  the CLI is the next step, along with `--include-uncommitted`, which `prepare`
+  does not yet support.
+
 - **Evidence citations are now checked against the repository, not just for
   presence** (#15). `collect_day_results.py read` gains a required `--repo` and
   verifies every evidence entry against the tree of the commit it cites: the
@@ -220,6 +246,23 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Note this is **not enforced by `collect_day_results.py`** — schema validation
   catches shape, not truth, and a fabricated number in a prose field is
   well-formed. That is a known limit, not an oversight.
+
+### Changed
+
+- **The analysis pipeline moved into the `git_worklog` package**, behind the
+  scripts that used to hold it: `git_worklog.analysis.history`, `.manifest` and
+  `.results`. Only `git_worklog*` is packaged, so an installed CLI has no
+  `scripts/` directory to shell out to — the logic had to be importable before
+  `analyze` could host any of it.
+
+  The scripts keep their exact command-line contracts and are unchanged from a
+  caller's point of view, with one addition: `collect_git_history.py` now
+  reports `repository.git_dir`.
+
+  Internally, the package raises `AnalysisError` (carrying the wire code) where
+  the scripts called `_fail()` and exited — a function that exits the process
+  cannot be reused by a second front end. Each script converts it back to the
+  exit code it always produced.
 
 ## [0.4.0] - 2026-07-16
 

@@ -20,7 +20,7 @@ no file -- the directory is not padded with empty days. So each date is one of:
 Conflating ``no-commits`` with ``gap`` would send the user off to backfill days
 that can never produce a file.
 
-Commit counts come from ``collect_git_history.collect_commits``, so the
+Commit counts come from ``git_worklog.analysis.history.collect_commits``, so the
 self-referential worklog-commit exclusion is inherited: a day whose only commits
 edited ``PROJECT_WORKLOG/`` counts as ``no-commits``, not as a gap.
 
@@ -36,8 +36,12 @@ import sys
 from datetime import date as date_cls, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import collect_git_history as cgh
+import _bootstrap  # noqa: F401 — must precede any git_worklog import
+
 import worklog_markers as wm
+
+from git_worklog.analysis import AnalysisError
+from git_worklog.analysis import history as cgh
 
 
 def _emit(payload: dict) -> None:
@@ -84,7 +88,7 @@ def check(args: argparse.Namespace) -> dict:
     except (ZoneInfoNotFoundError, ValueError):
         _fail("INVALID_TIMEZONE", f"Unknown IANA timezone: {args.timezone}.")
 
-    info = cgh.repo_info(args.repo)  # exits with NOT_A_GIT_REPO when applicable
+    info = cgh.repo_info(args.repo)  # raises NOT_A_GIT_REPO when applicable
     worklog_dir = args.dir if os.path.isabs(args.dir) else os.path.join(
         info["root"], args.dir)
     dir_exists = os.path.isdir(worklog_dir)
@@ -154,6 +158,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         _emit(check(args))
         return 0
+    except AnalysisError as exc:
+        _fail(exc.code, exc.message, **exc.extra)
     except cgh.GitError as exc:
         _fail("GIT_ERROR", str(exc))
     return 0

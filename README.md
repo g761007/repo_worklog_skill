@@ -117,6 +117,7 @@ pip install .          # from a clone; puts `git-worklog` on PATH
 git-worklog version    # CLI / layout / config-schema versions
 git-worklog doctor     # is this environment able to run the tool?
 git-worklog validate   # is the worklog on disk well-formed?
+git-worklog analyze    # prepare per-day analysis tasks, and collect them back
 ```
 
 Without installing, the same commands run straight from the skill folder:
@@ -128,9 +129,29 @@ PYTHONPATH=git-worklog python3 -m git_worklog doctor --text
 Each prints one JSON object (`--text` for a human-readable rendering). Exit `0`
 means ok, `1` means it ran and found a problem, `2` means it could not run.
 
+`analyze` is the pair of commands that bracket an analysis without performing
+it:
+
+```bash
+git-worklog analyze prepare --from 2026-07-01 --to 2026-07-07 \
+    --timezone Asia/Taipei --language zh-TW --language-source user-request
+# → one manifest per day under ~/.git-worklog/analysis/<run_id>/tasks/,
+#   each naming the result_path its analysis must be written to.
+
+git-worklog analyze collect --run-id <run_id>
+# → reads the results back and checks them: every prepared day arrived, none
+#   drifted language, and every evidence citation resolves against the tree of
+#   the commit it names.
+```
+
+Between the two, something has to actually read the patches and write the
+prose — and that something is your agent's model, not the CLI. This is why no
+model API key is needed: `prepare` only decides *what* must be analysed, and
+`collect` only decides whether to believe the answer. A day whose analysis never
+arrived is reported as `missing`, never as a day where nothing happened.
+
 More commands — generation, reports, migration — arrive as the CLI grows; today
-those live in the skill. The CLI never replaces the analysis itself: reading
-patches and deciding what changed is the agent's job, not a script's.
+those live in the skill.
 
 ### Usage
 
@@ -365,6 +386,7 @@ pip install .          # 從 clone 安裝，把 `git-worklog` 放進 PATH
 git-worklog version    # CLI／佈局／設定 schema 版本
 git-worklog doctor     # 這個環境跑得動嗎？
 git-worklog validate   # 磁碟上的工作日誌格式正確嗎？
+git-worklog analyze    # 建立每日分析任務，再把結果收回來驗證
 ```
 
 不安裝的話，同樣的指令可直接從 skill 資料夾執行：
@@ -376,8 +398,24 @@ PYTHONPATH=git-worklog python3 -m git_worklog doctor --text
 每個指令輸出單一 JSON 物件（`--text` 可切成人類可讀格式）。離開碼 `0` 表示正常、
 `1` 表示執行成功但發現問題、`2` 表示指令本身無法執行。
 
-產生日誌、報告、遷移等指令會隨 CLI 成長陸續加入，目前仍在 skill 內。CLI 永遠不會
-取代分析本身：閱讀 patch、判斷程式行為改變是 agent 的工作，不是腳本的。
+`analyze` 是一對指令，它們框住分析、但不執行分析：
+
+```bash
+git-worklog analyze prepare --from 2026-07-01 --to 2026-07-07 \
+    --timezone Asia/Taipei --language zh-TW --language-source user-request
+# → 在 ~/.git-worklog/analysis/<run_id>/tasks/ 下每天產生一份 manifest，
+#   每份都指定該日分析結果必須寫入的 result_path。
+
+git-worklog analyze collect --run-id <run_id>
+# → 把結果讀回來檢查：每個準備過的日期都有交、沒有任何一天語言跑掉，
+#   而且每條 evidence 引文都能在它所引用的那個 commit 的 tree 上對得上。
+```
+
+在這兩步之間，總得有人真的去讀 patch、寫出敘述——那是你的 agent 的模型，不是 CLI。
+這正是不需要模型 API key 的原因：`prepare` 只決定**該分析什麼**，`collect` 只決定
+要不要相信答案。分析沒交回來的日子會被報成 `missing`，絕不會被當成「這天沒事發生」。
+
+產生日誌、報告、遷移等指令會隨 CLI 成長陸續加入，目前仍在 skill 內。
 
 ### 使用方式
 

@@ -1,9 +1,11 @@
 """The ``git-worklog`` command.
 
-Phase one (roadmap §12.1) is deliberately small: ``version``, ``doctor`` and
-``validate`` — the three things you want *before* trusting anything else, and
-none of which need the analysis pipeline. Generation and reporting stay with the
-skill for now; the CLI does not replace the agent's LLM (roadmap §6.1).
+``version``, ``doctor`` and ``validate`` came first (roadmap §12.1): the things
+you want *before* trusting anything else, none of which need the analysis
+pipeline. ``analyze prepare``/``collect`` (§7) then bracket the pipeline — they
+decide what must be analysed and check what came back, while the analysis itself
+stays with the hosting agent's LLM. The CLI does not replace it and needs no
+model API key (§6.1). Rendering and applying stay with the skill for now.
 
 Every subcommand prints one JSON object to stdout, matching the scripts'
 contract, so the same parsing works everywhere. ``--text`` switches to a
@@ -22,6 +24,7 @@ import json
 import sys
 
 from git_worklog import __version__, language
+from git_worklog import markers as wm
 
 
 def _emit(payload: dict, as_text: bool, render) -> None:
@@ -56,6 +59,53 @@ def build_parser() -> argparse.ArgumentParser:
     v = sub.add_parser("validate", help="Validate a worklog directory.")
     v.add_argument("--repo", default=".", help="Repository to check (default: cwd).")
     v.add_argument("--dir", help="Worklog directory (default: <repo>/.git-worklog).")
+
+    a = sub.add_parser("analyze", help="Prepare per-day analysis tasks, and collect them back.")
+    asub = a.add_subparsers(dest="analyze_command", metavar="<prepare|collect>",
+                            required=True)
+
+    prep = asub.add_parser("prepare", help="Mint a run and write one manifest per day.")
+    prep.add_argument("--from", required=True, metavar="DATE",
+                      help="First day to analyse (YYYY-MM-DD, inclusive).")
+    prep.add_argument("--to", required=True, metavar="DATE",
+                      help="Last day to analyse (YYYY-MM-DD, inclusive).")
+    prep.add_argument("--timezone", required=True, metavar="TZ",
+                      help="IANA timezone deciding where each day starts.")
+    prep.add_argument("--repo", default=".", help="Repository to read (default: cwd).")
+    prep.add_argument("--dir", help="Worklog directory, read for its config.json "
+                                    f"language setting (default: ./{wm.WORKLOG_DIRNAME}).")
+    prep.add_argument("--run-dir", help="Override the run directory (default: "
+                                        "~/.git-worklog/analysis/<run_id>).")
+    prep.add_argument("--date-field", choices=["committer", "author"],
+                      default="committer",
+                      help="Which date decides day attribution (default: committer).")
+    prep.add_argument("--worklog-dir", default=wm.WORKLOG_DIRNAME,
+                      help="Worklog output directory; commits touching only this "
+                           "directory are excluded as self-referential.")
+    prep.add_argument("--provider", default="anthropic",
+                      help="Subagent provider key (anthropic / openai / google).")
+    prep.add_argument("--model-json", default="",
+                      help="Structured model object (JSON: {display_name, "
+                           "model_id[, reasoning_effort]}).")
+    prep.add_argument("--language", default="auto",
+                      help="Content language for the worklog as a BCP 47 tag "
+                           "(zh-TW, en, ja), or 'auto' to fall through to project "
+                           "config and GIT_WORKLOG_LANGUAGE. Resolved once and "
+                           "stamped on every manifest in the run.")
+    prep.add_argument("--language-source", default=None,
+                      help="Where --language came from, so the manifest records "
+                           "why and not just what: user-request, agent-host, "
+                           "conversation, cli-argument, project-config, "
+                           "environment, system-locale, fallback.")
+
+    coll = asub.add_parser("collect", help="Read and validate a prepared run's results.")
+    coll.add_argument("--run-id", help="The run to collect (from `analyze prepare`).")
+    coll.add_argument("--run-dir", help="The run directory, if it is not "
+                                        "~/.git-worklog/analysis/<run-id>.")
+    coll.add_argument("--repo", default=".",
+                      help="Repository the evidence cites. Every entry is checked "
+                           "against the tree of the commit it names — not the "
+                           "checkout, which holds everything changed since.")
     return p
 
 
@@ -72,6 +122,8 @@ def main(argv: "list[str] | None" = None) -> int:
         from git_worklog.cli import version as cmd
     elif args.command == "doctor":
         from git_worklog.cli import doctor as cmd
+    elif args.command == "analyze":
+        from git_worklog.cli import analyze as cmd
     else:
         from git_worklog.cli import validate as cmd
 
