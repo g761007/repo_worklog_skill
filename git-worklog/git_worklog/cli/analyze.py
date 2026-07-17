@@ -34,6 +34,7 @@ from git_worklog.analysis import SCHEMA_VERSION, AnalysisError
 from git_worklog.analysis import history as ah
 from git_worklog.analysis import manifest as am
 from git_worklog.analysis import results as ar
+from git_worklog.analysis import worktree as aw
 
 TASKS_SUBDIR = "tasks"
 RESULTS_SUBDIR = "results"
@@ -97,6 +98,13 @@ def _prepare(args) -> "tuple[dict, int]":
     for d in (tasks_dir, results_dir):
         os.makedirs(d, mode=0o700, exist_ok=True)
 
+    # Uncommitted work belongs to today and to no other day: a file's mtime says
+    # when it was last written, not when the work happened, so there is nothing
+    # to attribute a dirty worktree to on any past date. "Today" is read in the
+    # run's timezone, which is the same clock that decides where a day starts.
+    today = datetime.now(tz).date().isoformat()
+    worktree = aw.inspect(args.repo) if args.include_uncommitted else None
+
     tasks = []
     for date in dates:
         start, end = _day_bounds(date, tz)
@@ -104,10 +112,12 @@ def _prepare(args) -> "tuple[dict, int]":
             repo=args.repo, since=start.isoformat(), until=end.isoformat(),
             date_field=args.date_field, worklog_dir=args.worklog_dir,
         )
+        day_worktree = worktree if (worktree and date == today) else None
         result_path = os.path.join(results_dir, f"{date}.json")
         manifest = am.build(
             date=date, timezone=args.timezone, history=history,
-            include_uncommitted=False, provider=args.provider, model=model,
+            worktree=day_worktree, include_uncommitted=bool(day_worktree),
+            provider=args.provider, model=model,
             lang=lang, run_id=minted["run_id"], result_path=result_path,
         )
         manifest_path = os.path.join(tasks_dir, f"{date}.json")
@@ -120,6 +130,7 @@ def _prepare(args) -> "tuple[dict, int]":
             "has_changes": manifest["has_changes"],
             "commit_count": manifest["commit_count"],
             "large_day": manifest["large_day"],
+            "include_uncommitted": bool(day_worktree),
         })
 
     payload = {
@@ -132,8 +143,21 @@ def _prepare(args) -> "tuple[dict, int]":
         "language": lang.as_manifest(),
         "tasks": tasks,
     }
-    if lang.warnings:
-        payload["warnings"] = list(lang.warnings)
+    if worktree:
+        payload["worktree_fingerprint"] = worktree["worktree_fingerprint"]
+    warnings = list(lang.warnings)
+    if worktree and today not in dates:
+        # Asked for uncommitted work on a range that does not contain today, so
+        # there is nowhere to put it. Silence here would read as "the worktree
+        # was clean", which is a different and wrong statement.
+        warnings.append({
+            "code": "UNCOMMITTED_NOT_IN_RANGE",
+            "message": f"--include-uncommitted was requested but {today} is not "
+                       f"in the range, and uncommitted work can only be "
+                       f"attributed to today. It has been left out.",
+        })
+    if warnings:
+        payload["warnings"] = warnings
     return payload, 0
 
 
@@ -161,12 +185,14 @@ def _collect(args) -> "tuple[dict, int]":
     # list instead would let a day be dropped from the run simply by leaving it
     # out of the second command -- the exact failure `missing` exists to catch.
     dates, expected_language = [], None
+    required_by_date = {}
     for name in sorted(os.listdir(tasks_dir)):
         if not name.endswith(".json"):
             continue
         with open(os.path.join(tasks_dir, name), "r", encoding="utf-8") as fh:
             manifest = json.load(fh)
         dates.append(manifest["date"])
+        required_by_date[manifest["date"]] = am.required_files(manifest)
         block = manifest.get("language") or {}
         if block.get("resolved"):
             expected_language = block["resolved"]
@@ -174,7 +200,8 @@ def _collect(args) -> "tuple[dict, int]":
         raise AnalysisError("RUN_HAS_NO_TASKS",
                             f"{tasks_dir} contains no manifests.", run_dir=run_dir)
 
-    payload = ar.read_run(results_dir, dates, args.repo, expected_language)
+    payload = ar.read_run(results_dir, dates, args.repo, expected_language,
+                          required_by_date)
 
     # A result nobody asked for is not a bonus: it means the run directory holds
     # analysis of a day this run never dispatched, and merging it would put a

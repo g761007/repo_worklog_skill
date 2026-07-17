@@ -8,6 +8,35 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A day's analysis must now account for the source it changed** (#5).
+  Manifests carry `required_commit_file_pairs` — every (commit, file) the day
+  touched, each flagged required or not — and `analyze collect` fails any day
+  that leaves a required file unmentioned (`COVERAGE_INCOMPLETE`, naming them).
+
+  This is the completeness half of the evidence problem. #15 made citations
+  *accurate*: one now has to resolve against the tree it names. Accuracy says
+  nothing about *coverage* — an analysis can cite three real files perfectly,
+  never mention the other twenty it changed, and still read as
+  `status: complete, confidence: verified`.
+
+  Naming a file in a work item's `files[]` satisfies the requirement; an
+  `evidence[]` citation is stronger but not demanded. That bar is what
+  measurement supports rather than what a stricter-sounding rule would give:
+  against a real, good run, requiring `evidence[]` for every file rejects it
+  (31% cited), while `files[] ∪ evidence[]` passes it at 91% and still names the
+  two files its analysis genuinely never reached.
+
+  Only source files are required. Docs, config, CI and tests are listed but
+  excused — real work, but a day may fairly cover them in a sentence. Binaries
+  and submodules have no source to cite. Deletions are excused because the file
+  is *gone* from that commit's tree: requiring a citation would require the
+  impossible.
+
+- **`analyze prepare --include-uncommitted`** — the working tree joins today's
+  manifest and no other day's. Asking for it on a range that excludes today
+  warns (`UNCOMMITTED_NOT_IN_RANGE`) rather than silently reading as "the tree
+  was clean".
+
 - **`git-worklog analyze prepare` / `analyze collect`** (#5) — the two commands
   that bracket an analysis without performing it. `prepare` mints a run and
   writes one Analysis Manifest per day under
@@ -30,9 +59,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   because the manifest is what actually reaches the model, and a rule stated
   only in prose is a rule that is not enforced.
 
-  The skill still drives the pipeline through `scripts/`; switching it over to
-  the CLI is the next step, along with `--include-uncommitted`, which `prepare`
-  does not yet support.
+  The skill now drives the analysis pipeline through these two commands
+  (`python3 -m git_worklog analyze ...`, no install needed) instead of
+  `collect_git_history.py | build_analysis_manifest.py` and
+  `collect_day_results.py`.
 
 - **Evidence citations are now checked against the repository, not just for
   presence** (#15). `collect_day_results.py read` gains a required `--repo` and
@@ -250,14 +280,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **The analysis pipeline moved into the `git_worklog` package**, behind the
-  scripts that used to hold it: `git_worklog.analysis.history`, `.manifest` and
-  `.results`. Only `git_worklog*` is packaged, so an installed CLI has no
-  `scripts/` directory to shell out to — the logic had to be importable before
-  `analyze` could host any of it.
+  scripts that used to hold it: `git_worklog.analysis.history`, `.manifest`,
+  `.results` and `.worktree`. Only `git_worklog*` is packaged, so an installed
+  CLI has no `scripts/` directory to shell out to — the logic had to be
+  importable before `analyze` could host any of it.
 
   The scripts keep their exact command-line contracts and are unchanged from a
   caller's point of view, with one addition: `collect_git_history.py` now
   reports `repository.git_dir`.
+
+  `collect_day_results.py` still works, but cannot check coverage: it is handed
+  a run directory and never sees a manifest, so it does not know what was
+  required and does not pretend to. Prefer `analyze collect`.
 
   Internally, the package raises `AnalysisError` (carrying the wire code) where
   the scripts called `_fail()` and exited — a function that exits the process

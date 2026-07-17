@@ -35,6 +35,12 @@ ANALYSIS_RULES = [
     "Preserve code symbols, file paths, commit hashes, and identifiers.",
 ]
 
+# The categories whose files carry the behaviour a worklog is *about*. A day's
+# analysis may reasonably summarise its docs and config in one line, but source
+# it never mentioned is source it may never have read -- so only these are
+# required to be accounted for (see required_commit_file_pairs below).
+SOURCE_CATEGORIES = ("backend", "frontend", "mobile", "database")
+
 # Category priority mirrors references/code-analysis-rules.md (plan section 9.4).
 # Earlier entries win when a path matches more than one rule.
 _CATEGORY_ORDER = [
@@ -220,6 +226,66 @@ def resolve_language(explicit: "str | None", source: "str | None",
     )
 
 
+def _pair_required(f: dict, path: str) -> bool:
+    """Must this (commit, file) pair be accounted for by the day's analysis?
+
+    Deliberately narrower than "everything that changed". Three exclusions, each
+    for a different reason:
+
+    * non-source categories -- docs, config, CI and tests are real work, but a
+      day may fairly cover them in a sentence, and demanding a citation for each
+      would fail honest days rather than catch dishonest ones.
+    * binary and submodule files -- there is no source to read or symbol to cite.
+    * deletions -- the file is *gone* from that commit's tree, so any citation of
+      it at that commit would be rejected by the evidence check. Requiring one
+      would be requiring the impossible.
+    """
+    if classify(path) not in SOURCE_CATEGORIES:
+        return False
+    if f.get("is_binary") or f.get("is_submodule"):
+        return False
+    if f.get("status") == "D":
+        return False
+    return True
+
+
+def _required_commit_file_pairs(commits: "list[dict]") -> "list[dict]":
+    """Every (commit, file) pair of the day, flagged for whether it is required.
+
+    All pairs are listed, not only the required ones: the subagent should see
+    what it is *not* being held to as well, and a reader of the manifest can
+    tell "excluded" from "overlooked".
+    """
+    pairs = []
+    for commit in commits:
+        sha = commit.get("short_hash")
+        for f in commit.get("files", []):
+            path = f.get("path")
+            if not path:
+                continue
+            pairs.append({
+                "commit": sha,
+                "file": path,
+                "category": classify(path),
+                "required": _pair_required(f, path),
+            })
+    pairs.sort(key=lambda p: (p["file"], p["commit"] or ""))
+    return pairs
+
+
+def required_files(manifest: dict) -> "set[str]":
+    """The distinct files a manifest requires the day's analysis to account for.
+
+    File-level, not pair-level, and that is forced rather than chosen: coverage
+    is satisfied by `work_items[].files[]` as well as by `evidence[]`, and a
+    `files[]` entry names a path without saying which commit it belongs to. Only
+    `evidence[]` carries both, so a pair-level rule could be met by evidence
+    alone -- which measurement showed rejects days that are actually fine.
+    """
+    return {p["file"] for p in manifest.get("required_commit_file_pairs") or []
+            if p.get("required")}
+
+
 def _repository_block(history: "dict | None") -> "dict | None":
     """The §8 repository block, taken from the history payload's own metadata."""
     info = (history or {}).get("repository")
@@ -297,6 +363,7 @@ def build(date: str, timezone: str, history: "dict | None" = None,
         } for f in files],
         "file_groups": groups,
         "required_context": _required_context(groups),
+        "required_commit_file_pairs": _required_commit_file_pairs(commits),
         "analysis_rules": list(ANALYSIS_RULES),
         "uncommitted_changes": uncommitted,
         "large_day": is_large,

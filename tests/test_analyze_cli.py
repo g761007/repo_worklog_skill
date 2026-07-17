@@ -15,6 +15,8 @@ import os
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from helpers import _git, _write, rmtree, run_cli
 
@@ -22,10 +24,22 @@ _REPO = None
 _COMMIT = None
 _DATE = "2026-07-15"
 _DAY_ARGS = ["--from", _DATE, "--to", _DATE, "--timezone", "Asia/Taipei"]
+_TZ = "Asia/Taipei"
+
+
+def _today() -> str:
+    """Today in the fixture's timezone — the only day uncommitted work can join."""
+    return datetime.now(ZoneInfo(_TZ)).date().isoformat()
 
 
 def setUpModule():
-    """A real one-day repo, so evidence cites something that actually exists."""
+    """A real one-day repo, so evidence cites something that actually exists.
+
+    `src/cache.py` and `src/util.py` are both source; `README.md` and
+    `tests/test_cache.py` are not. That mix is the point: the coverage rule only
+    holds the day to its source files, and a fixture of one file could not tell
+    a working rule from one that requires nothing.
+    """
     global _REPO, _COMMIT
     _REPO = tempfile.mkdtemp(prefix="rw_an_repo_")
     _git(_REPO, "init", "-q", "-b", "main")
@@ -34,6 +48,9 @@ def setUpModule():
     _git(_REPO, "config", "commit.gpgsign", "false")
     _write(_REPO, "src/cache.py",
            "class CacheLayer:\n    def get(self, key):\n        return key\n")
+    _write(_REPO, "src/util.py", "def helper():\n    return 1\n")
+    _write(_REPO, "README.md", "# demo\n")
+    _write(_REPO, "tests/test_cache.py", "def test_get():\n    assert True\n")
     _git(_REPO, "add", "-A")
     _git(_REPO, "commit", "-q", "-m", "add cache",
          env={"GIT_AUTHOR_DATE": f"{_DATE}T10:00:00+08:00",
@@ -48,6 +65,13 @@ def tearDownModule():
 
 
 def _result(date: str, **overrides) -> dict:
+    """A result that covers the day: both source files accounted for.
+
+    `src/util.py` is only listed in `files[]`, never cited in `evidence[]` — on
+    purpose. That is the normal shape of good analysis (a real run cited 31% of
+    its files while listing 88%), so the default fixture has to look like it, or
+    the tests would only ever prove the rule against exhaustively-cited days.
+    """
     obj = {
         "date": date, "timezone": "Asia/Taipei", "language": "zh-TW",
         "status": "complete", "confidence": "verified",
@@ -55,7 +79,8 @@ def _result(date: str, **overrides) -> dict:
         "has_changes": True, "commits": [_COMMIT],
         "work_items": [{
             "title": "t", "summary": "s", "behavior_change": "b",
-            "implementation": "i", "impact": "im", "files": ["src/cache.py"],
+            "implementation": "i", "impact": "im",
+            "files": ["src/cache.py", "src/util.py"],
             "commits": [_COMMIT], "tests": [], "risks": [],
             "maintenance_notes": [], "follow_ups": [], "confidence": "verified",
             "evidence": [{"commit": _COMMIT, "file": "src/cache.py",
@@ -301,6 +326,256 @@ class TestCollect(_Run):
         d, rc, _ = self.collect("rw-19700101-000000")
         self.assertEqual(d["errors"][0]["code"], "RUN_NOT_PREPARED")
         self.assertEqual(rc, 2)
+
+
+class TestRequiredPairs(_Run):
+    """The manifest's answer to "what must this day's analysis account for?"."""
+
+    def _pairs(self) -> "list[dict]":
+        d, _, err = self.prepare()
+        self.assertTrue(d["ok"], err)
+        with open(d["tasks"][0]["manifest_path"], encoding="utf-8") as fh:
+            return json.load(fh)["required_commit_file_pairs"]
+
+    def test_every_changed_pair_is_listed_with_a_verdict(self):
+        # All pairs, not just the required ones: a reader must be able to tell
+        # "excluded" from "overlooked".
+        pairs = self._pairs()
+        self.assertEqual({p["file"] for p in pairs},
+                         {"src/cache.py", "src/util.py", "README.md",
+                          "tests/test_cache.py"})
+        for p in pairs:
+            self.assertIn(p["required"], (True, False))
+            self.assertEqual(p["commit"], _COMMIT)
+
+    def test_only_source_files_are_required(self):
+        required = {p["file"] for p in self._pairs() if p["required"]}
+        self.assertEqual(required, {"src/cache.py", "src/util.py"})
+
+    def test_docs_and_tests_are_listed_but_not_required(self):
+        # Real work, but a day may fairly cover them in a sentence. Requiring a
+        # citation each would fail honest days rather than catch dishonest ones.
+        excused = {p["file"]: p["category"] for p in self._pairs()
+                   if not p["required"]}
+        self.assertEqual(excused,
+                         {"README.md": "documentation",
+                          "tests/test_cache.py": "tests"})
+
+
+class TestDeletionsAndBinaries(_Run):
+    """Pairs that cannot be cited must not be required."""
+
+    def setUp(self):
+        super().setUp()
+        self.repo = tempfile.mkdtemp(prefix="rw_an_del_")
+        _git(self.repo, "init", "-q", "-b", "main")
+        _git(self.repo, "config", "user.email", "t@example.com")
+        _git(self.repo, "config", "user.name", "Tester")
+        _git(self.repo, "config", "commit.gpgsign", "false")
+        _write(self.repo, "src/gone.py", "def gone():\n    return 1\n")
+        _write(self.repo, "src/kept.py", "def kept():\n    return 2\n")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-q", "-m", "seed",
+             env={"GIT_AUTHOR_DATE": "2026-07-14T10:00:00+08:00",
+                  "GIT_COMMITTER_DATE": "2026-07-14T10:00:00+08:00"})
+        os.remove(os.path.join(self.repo, "src", "gone.py"))
+        with open(os.path.join(self.repo, "src", "blob.py"), "wb") as fh:
+            fh.write(b"\x00\x01\x02BINARY\xff\xfe")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-q", "-m", "delete gone, add binary",
+             env={"GIT_AUTHOR_DATE": f"{_DATE}T10:00:00+08:00",
+                  "GIT_COMMITTER_DATE": f"{_DATE}T10:00:00+08:00"})
+
+    def tearDown(self):
+        rmtree(self.repo)
+        super().tearDown()
+
+    def test_a_deleted_file_is_not_required(self):
+        # It is gone from that commit's tree, so any citation of it there would
+        # be rejected by the evidence check. Requiring one requires the
+        # impossible, and the day could never pass.
+        d, _, err = run_cli("analyze", "prepare", "--repo", self.repo, *_DAY_ARGS,
+                            "--language", "zh-TW", "--language-source",
+                            "user-request", env=self.env)
+        self.assertTrue(d["ok"], err)
+        with open(d["tasks"][0]["manifest_path"], encoding="utf-8") as fh:
+            pairs = json.load(fh)["required_commit_file_pairs"]
+        by_file = {p["file"]: p for p in pairs}
+        self.assertIn("src/gone.py", by_file)
+        self.assertFalse(by_file["src/gone.py"]["required"])
+
+    def test_a_binary_file_is_not_required(self):
+        # No source to read, no symbol to cite.
+        d, _, _ = run_cli("analyze", "prepare", "--repo", self.repo, *_DAY_ARGS,
+                          "--language", "zh-TW", "--language-source",
+                          "user-request", env=self.env)
+        with open(d["tasks"][0]["manifest_path"], encoding="utf-8") as fh:
+            pairs = json.load(fh)["required_commit_file_pairs"]
+        by_file = {p["file"]: p for p in pairs}
+        self.assertFalse(by_file["src/blob.py"]["required"])
+
+
+class TestCoverage(_Run):
+    """#15 made citations accurate. Accuracy says nothing about completeness."""
+
+    def test_a_covered_day_passes(self):
+        d, _, _ = self.prepare()
+        self.write_result(d["run_id"], _DATE, _result(_DATE))
+        c, rc, err = self.collect(d["run_id"])
+        self.assertEqual(c["complete"], [_DATE], err)
+        self.assertEqual(rc, 0)
+
+    def test_source_the_analysis_never_mentions_fails_the_day(self):
+        # The whole point: three real files cited perfectly, twenty unmentioned,
+        # and it still reads as confident verified work.
+        d, _, _ = self.prepare()
+        obj = _result(_DATE)
+        obj["work_items"][0]["files"] = ["src/cache.py"]  # src/util.py dropped
+        self.write_result(d["run_id"], _DATE, obj)
+        c, rc, _ = self.collect(d["run_id"])
+        issue = c["invalid"][0]["issues"][0]
+        self.assertEqual(issue["code"], "COVERAGE_INCOMPLETE")
+        self.assertEqual(issue["missing_files"], ["src/util.py"])
+        self.assertEqual((issue["covered_count"], issue["required_count"]), (1, 2))
+        self.assertTrue(c["partial_run"])
+        self.assertEqual(rc, 1)
+
+    def test_files_alone_satisfies_coverage_without_a_citation(self):
+        # Coverage asks the weaker question. Requiring evidence[] for every file
+        # was measured against a real good run and would have rejected it.
+        d, _, _ = self.prepare()
+        obj = _result(_DATE)
+        obj["work_items"][0]["evidence"] = [
+            {"commit": _COMMIT, "file": "src/cache.py", "note": "x"}]
+        self.assertNotIn("src/util.py",
+                         [e["file"] for e in obj["work_items"][0]["evidence"]])
+        self.write_result(d["run_id"], _DATE, obj)
+        c, rc, _ = self.collect(d["run_id"])
+        self.assertEqual(c["complete"], [_DATE])
+        self.assertEqual(rc, 0)
+
+    def test_evidence_alone_satisfies_coverage_without_a_files_entry(self):
+        d, _, _ = self.prepare()
+        obj = _result(_DATE)
+        obj["work_items"][0]["files"] = ["src/cache.py"]
+        obj["work_items"][0]["evidence"].append(
+            {"commit": _COMMIT, "file": "src/util.py", "symbol": "helper",
+             "note": "y"})
+        self.write_result(d["run_id"], _DATE, obj)
+        c, rc, _ = self.collect(d["run_id"])
+        self.assertEqual(c["complete"], [_DATE])
+        self.assertEqual(rc, 0)
+
+    def test_files_recorded_in_an_unspecified_section_still_count(self):
+        # The contract pins files[] on work_items[] only, but leaves fixes[] /
+        # refactors[] / configuration_changes[] open — and a real run put files[]
+        # on those too. Reading only the specified place would call an honestly
+        # recorded change an omission.
+        d, _, _ = self.prepare()
+        obj = _result(_DATE)
+        obj["work_items"][0]["files"] = ["src/cache.py"]
+        obj["refactors"] = [{"title": "tidy helper", "files": ["src/util.py"]}]
+        self.write_result(d["run_id"], _DATE, obj)
+        c, rc, _ = self.collect(d["run_id"])
+        self.assertEqual(c["complete"], [_DATE])
+        self.assertEqual(rc, 0)
+
+    def test_unmentioned_docs_do_not_fail_the_day(self):
+        # README.md changed that day and appears nowhere in the result.
+        d, _, _ = self.prepare()
+        obj = _result(_DATE)
+        self.assertNotIn("README.md", json.dumps(obj))
+        self.write_result(d["run_id"], _DATE, obj)
+        c, rc, _ = self.collect(d["run_id"])
+        self.assertEqual(c["complete"], [_DATE])
+        self.assertEqual(rc, 0)
+
+    def test_the_script_path_does_not_pretend_to_check_coverage(self):
+        # `collect_day_results.py read` is handed a run directory and nothing
+        # else, so it genuinely cannot know what was required. It must check what
+        # it can rather than invent a verdict.
+        from helpers import run_script
+        run_dir = os.path.join(self.home, "flat")
+        os.makedirs(run_dir)
+        obj = _result(_DATE)
+        obj["work_items"][0]["files"] = []  # would fail coverage, if it applied
+        with open(os.path.join(run_dir, f"{_DATE}.json"), "w", encoding="utf-8") as fh:
+            json.dump(obj, fh)
+        d, rc, err = run_script("collect_day_results.py",
+                                ["read", "--run-dir", run_dir, "--dates", _DATE,
+                                 "--repo", _REPO], env=self.env)
+        self.assertTrue(d["ok"], err)
+        self.assertEqual(d["complete"], [_DATE])
+        self.assertEqual(rc, 0)
+
+
+class TestIncludeUncommitted(_Run):
+    """Uncommitted work belongs to today and to no other day."""
+
+    def test_todays_task_carries_the_working_tree(self):
+        today = _today()
+        _write(_REPO, "src/scratch.py", "def scratch():\n    return 0\n")
+        try:
+            d, _, err = run_cli("analyze", "prepare", "--repo", _REPO,
+                                "--from", today, "--to", today,
+                                "--timezone", _TZ, "--language", "zh-TW",
+                                "--language-source", "user-request",
+                                "--include-uncommitted", env=self.env)
+            self.assertTrue(d["ok"], err)
+            self.assertTrue(d["tasks"][0]["include_uncommitted"])
+            self.assertIn("worktree_fingerprint", d)
+            with open(d["tasks"][0]["manifest_path"], encoding="utf-8") as fh:
+                m = json.load(fh)
+            self.assertIn("src/scratch.py",
+                          [u["path"] for u in m["uncommitted_changes"]])
+            self.assertTrue(m["has_changes"],
+                            "a dirty tree is a change even with no commits")
+        finally:
+            os.remove(os.path.join(_REPO, "src", "scratch.py"))
+
+    def test_a_past_day_never_carries_the_working_tree(self):
+        # A file's mtime says when it was last written, not when the work
+        # happened, so there is nothing to attribute a dirty tree to on a past
+        # date. Guessing would put today's half-done work into a shipped day.
+        _write(_REPO, "src/scratch.py", "def scratch():\n    return 0\n")
+        try:
+            d, _, err = run_cli("analyze", "prepare", "--repo", _REPO, *_DAY_ARGS,
+                                "--language", "zh-TW", "--language-source",
+                                "user-request", "--include-uncommitted",
+                                env=self.env)
+            self.assertTrue(d["ok"], err)
+            self.assertFalse(d["tasks"][0]["include_uncommitted"])
+            with open(d["tasks"][0]["manifest_path"], encoding="utf-8") as fh:
+                self.assertEqual(json.load(fh)["uncommitted_changes"], [])
+        finally:
+            os.remove(os.path.join(_REPO, "src", "scratch.py"))
+
+    def test_uncommitted_outside_the_range_is_reported_not_dropped(self):
+        # Silence here would read as "the worktree was clean", which is a
+        # different and wrong statement.
+        _write(_REPO, "src/scratch.py", "x = 1\n")
+        try:
+            d, _, _ = run_cli("analyze", "prepare", "--repo", _REPO, *_DAY_ARGS,
+                              "--language", "zh-TW", "--language-source",
+                              "user-request", "--include-uncommitted",
+                              env=self.env)
+            codes = [w["code"] for w in d.get("warnings", [])]
+            self.assertIn("UNCOMMITTED_NOT_IN_RANGE", codes)
+        finally:
+            os.remove(os.path.join(_REPO, "src", "scratch.py"))
+
+    def test_without_the_flag_the_working_tree_is_ignored(self):
+        _write(_REPO, "src/scratch.py", "x = 1\n")
+        try:
+            today = _today()
+            d, _, _ = run_cli("analyze", "prepare", "--repo", _REPO,
+                              "--from", today, "--to", today, "--timezone", _TZ,
+                              "--language", "zh-TW", "--language-source",
+                              "user-request", env=self.env)
+            self.assertFalse(d["tasks"][0]["include_uncommitted"])
+            self.assertNotIn("worktree_fingerprint", d)
+        finally:
+            os.remove(os.path.join(_REPO, "src", "scratch.py"))
 
 
 if __name__ == "__main__":

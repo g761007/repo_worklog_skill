@@ -82,6 +82,11 @@ def build_parser() -> argparse.ArgumentParser:
     prep.add_argument("--worklog-dir", default=wm.WORKLOG_DIRNAME,
                       help="Worklog output directory; commits touching only this "
                            "directory are excluded as self-referential.")
+    prep.add_argument("--include-uncommitted", action="store_true",
+                      help="Also hand the subagent the working tree's uncommitted "
+                           "changes. They are attributed to today and to no other "
+                           "day; if today is outside --from/--to they are left out "
+                           "and the run says so.")
     prep.add_argument("--provider", default="anthropic",
                       help="Subagent provider key (anthropic / openai / google).")
     prep.add_argument("--model-json", default="",

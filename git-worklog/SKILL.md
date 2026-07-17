@@ -22,12 +22,15 @@ Markdown file per day under `.git-worklog/` and refresh `.git-worklog/index.md`,
 while preserving human notes.
 
 The deterministic work (date math, Git collection, Markdown surgery, preview
-integrity) is done by the scripts in `scripts/`. The judgement work (reading
-code, deciding what actually changed, writing the summary) is done by you and
-per-day subagents. **Never let commit messages stand in for reading the diff.**
+integrity) is done by the `git-worklog` CLI and the scripts in `scripts/`. The
+judgement work (reading code, deciding what actually changed, writing the
+summary) is done by you and per-day subagents. **Never let commit messages stand
+in for reading the diff.**
 
-`python3` and `git` must be available. Run every script with
-`python3 scripts/<name>.py`; each prints one JSON object to stdout.
+`python3` and `git` must be available; nothing needs installing. Run the CLI as
+`python3 -m git_worklog <command>` and any script as `python3 scripts/<name>.py`,
+both from this directory. Each prints one JSON object to stdout. Exit `0` means
+ok, `1` means it ran and found a problem, `2` means it could not run.
 
 ---
 
@@ -229,87 +232,100 @@ python3 scripts/collect_git_history.py --repo <root> --info-only
 
 ## 5. Per-day analysis — one Day Subagent per day
 
-Split the range into one task **per calendar day**.
+Two commands bracket this section. `analyze prepare` decides **what** must be
+analysed and **in which language**; `analyze collect` decides whether to
+**believe** what came back. Everything between them — reading the patches,
+understanding the code, writing the prose — is yours and the subagents'. The CLI
+never does it and needs no model API key.
 
-**5·0. Mint the run's result directory once, before dispatching anything:**
-
-```
-python3 scripts/collect_day_results.py init --dates <every date in the range>
-```
-
-Keep `run_dir` and `paths`. Each Day Subagent **writes** its JSON to its own
-`paths[<date>]` and replies only `DONE` — results are never passed back as reply
-text, which drops and truncates them. See `references/subagent-contract.md` §6a.
-
-Then, for each day:
-
-**5a. Collect that day's Git facts** (deterministic):
+**5a. Prepare the run** (deterministic, once for the whole range):
 
 ```
-python3 scripts/collect_git_history.py --repo <root> \
-    --since <day.start> --until <day.end>
+python3 -m git_worklog analyze prepare --repo <root> \
+    --from <first date> --to <last date> --timezone <tz> \
+    --language <tag|auto> --language-source <source> \
+    --provider <provider> --model-json '<model object>' \
+    [--include-uncommitted]
 ```
 
-Returns the day's commits with metadata, parents, merge flag, revert
-candidate flag, and each commit's changed files (rename/copy aware, binary and
-submodule flags, add/del counts). Patches are **not** included — subagents read
-them with `git show`.
+Returns `run_id`, `run_dir`, and `tasks[]` — one entry per calendar day, each
+with a `manifest_path` (what to analyse) and a `result_path` (where its analysis
+must be written). Keep all of it.
 
-**5b. Build the day's manifest** (deterministic):
-
-```
-python3 scripts/collect_git_history.py ... \
-  | python3 scripts/build_analysis_manifest.py --date <day> --timezone <tz> \
-      --language <tag|auto> --language-source <source> \
-      --provider <provider> --model-json '<model object>' [--include-uncommitted --worktree <file>]
-```
-
-`--language` and `--language-source` come from §2a and are **identical for every
-day of the run** — a manifest's `language.resolved` is what each day's result is
-checked against, and days that disagree block the whole run.
+`--language` and `--language-source` come from §2a. They are resolved **once**
+here and stamped on every manifest in the run: a manifest's `language.resolved`
+is what each day's result is checked against, and days that disagree block the
+whole run.
 
 Resolve `<provider>` and `<model object>` **once for the whole run** with
 `scripts/resolve_provider_model.py --host <anthropic|openai|google>` (see the
-model table below), then thread its `provider` and `model` into every day's
-manifest. `model` is an object — `{display_name, model_id}` plus
+model table below). `model` is an object — `{display_name, model_id}` plus
 `reasoning_effort` for openai only.
 
-Gives `file_groups` (grouped by real work area), `required_context`, a
-`large_day` flag recommending Code Analysis Subagents when the day is big, and
+Each manifest gives `file_groups` (grouped by real work area),
+`required_context`, `analysis_rules`, a `large_day` flag recommending Code
+Analysis Subagents when the day is big, `required_commit_file_pairs` (§5b), and
 the day's authorship — `authors[]` (distinct names, first-appearance order) plus
 `commits[].author_name`. You render the `參與者` line and each `相關 commits`
 entry's author from these directly; the subagent never returns attribution.
 
-**5c. Spawn one Day Subagent** for that day, passing the manifest **and its
-`paths[<date>]` output path**. The subagent must read the real diffs and enough
-code context, determine the **end-of-day state** (a feature added then reverted
-the same day is *not* a live change), and **write** the structured JSON in
-`references/subagent-contract.md` to that path, replying only `DONE`. It must not
-write to the worklog. Days with no commits still write `has_changes:false`.
+Patches are **not** in the manifest — subagents read them with `git show`.
+
+**5b. What each day is held to.** Every manifest lists
+`required_commit_file_pairs`: each (commit, file) the day touched, flagged
+`required` or not. **Required means the day's analysis must account for that
+file** — naming it in a work item's `files[]` is enough; an `evidence[]` citation
+is stronger but not demanded. Only source files are required; docs, config, CI,
+tests, binaries and deleted files are listed but excused (a deleted file is gone
+from that commit's tree, so it *cannot* be cited).
+
+A required file the analysis never mentions fails the day at §5d. This is not
+pedantry: a file that was changed but never described may never have been read,
+and that is invisible in a result that otherwise looks confident.
+
+**5c. Spawn one Day Subagent** per day, passing its `manifest_path` **and its
+`result_path`**. The subagent must read the real diffs and enough code context,
+determine the **end-of-day state** (a feature added then reverted the same day is
+*not* a live change), and **write** the structured JSON in
+`references/subagent-contract.md` to that path, replying only `DONE` — results
+are never passed back as reply text, which drops and truncates them
+(`references/subagent-contract.md` §6a). It must not write to the worklog. Days
+with no commits still write `has_changes:false`.
 
 **5d. Collect every day's result** (deterministic), once all subagents finish:
 
 ```
-python3 scripts/collect_day_results.py read --run-dir <run_dir> \
-    --dates <every dispatched date> --language <the manifest's language.resolved> \
-    --repo <root>
+python3 -m git_worklog analyze collect --run-id <run_id> --repo <root>
 ```
 
-`--repo` is required: every evidence entry is checked against the tree of the
-commit it cites — the commit exists, the file existed *at that commit*, the
-symbol appears in it, the line range is inside it. A citation that does not
-resolve fails the day, exactly as prose evidence does; a subagent that cites
-`migrate_directory` for a function called `parse_legacy` has told you nothing you
-can follow (#15). On a shallow clone the unreachable commits report
-`EVIDENCE_UNVERIFIABLE` rather than failing the day — that is the runner's clone
-depth, not the subagent's fault.
+Nothing here names a date or a language: `collect` reads the run's own
+manifests, so a day cannot be dropped from the check by being left off a command
+line. It reports:
 
-It validates each file against the return schema and gives `results` (date →
-object), `complete`, `degraded`, `missing`, `invalid`, `failed_dates`,
-`partial_run`, and `escalation_suggested_dates`. **A date in `missing` or
-`invalid` is a failed day, not an empty one** — never treat it as "nothing
-happened" and never fall back to its commit messages. `partial_run:true` blocks
-apply by default (§9).
+- `complete` / `degraded` / `missing` / `invalid` / `unknown` / `failed_dates`,
+  `results` (date → object), `partial_run`, `escalation_suggested_dates`.
+- **A date in `missing` or `invalid` is a failed day, not an empty one** — never
+  treat it as "nothing happened" and never fall back to its commit messages.
+- `unknown` is a result file the run never asked for. Do not merge it.
+- `partial_run:true` blocks apply by default (§9). Exit code is `1`.
+
+Three things every result is checked against, and each fails the day:
+
+- **Language** — the tag must be the one its manifest asked for.
+- **Evidence accuracy** — every entry is checked against the tree of the commit
+  it cites: the commit exists, the file existed *at that commit*, the `symbol`
+  appears in it, the `lines` range is inside it. A subagent that cites
+  `migrate_directory` for a function called `parse_legacy` has told you nothing
+  you can follow (#15). On a shallow clone unreachable commits report
+  `EVIDENCE_UNVERIFIABLE` rather than failing the day — that is the runner's
+  clone depth, not the subagent's fault.
+- **Coverage** — every required file (§5b) is mentioned somewhere.
+  `COVERAGE_INCOMPLETE` names exactly which were not.
+
+If a day fails, fix the analysis — re-run that day's subagent against the same
+manifest and let it write its `result_path` again, then collect once more. Do
+**not** work around a failure by editing the result file by hand, and never
+paper over a gap with commit messages.
 
 For large days, the Day Subagent may fan out into Code Analysis Subagents grouped
 by feature/module (see `references/subagent-contract.md`).
@@ -340,22 +356,27 @@ approval (a new dry-run + new `preview_id`). Details:
 
 ## 6. Uncommitted changes (only when include_uncommitted=true)
 
-```
-python3 scripts/inspect_worktree.py --repo <root>
-```
+Pass `--include-uncommitted` to `analyze prepare` (§5a). It classifies
+`staged` / `unstaged` / `untracked` (binary-aware), puts them on **today's**
+manifest as `uncommitted_changes[]`, and returns a `worktree_fingerprint` on the
+run.
 
-Classifies `staged` / `unstaged` / `untracked` (binary-aware) and returns a
-`worktree_fingerprint`. Uncommitted content is attributed to **today only** —
-never spread across historical days. Present it in its own
-`### 尚未提交的異動` section, split into staged / unstaged / untracked, and never
-describe it as committed. In a multi-day range, only today gets a worktree pass.
+Uncommitted content is attributed to **today only** — never spread across
+historical days, because a file's mtime says when it was last written, not when
+the work happened. In a multi-day range only today's task carries it; if today
+is outside the range, prepare warns `UNCOMMITTED_NOT_IN_RANGE` rather than
+silently dropping it. Present it in its own `### 尚未提交的異動` section, split
+into staged / unstaged / untracked, and never describe it as committed.
+
+`scripts/inspect_worktree.py --repo <root>` still exists if you need the
+worktree on its own.
 
 ---
 
 ## 7. Merge results, generate Markdown, dry-run
 
-1. Merge the per-day results from `collect_day_results.py read` (§5d). If it
-   reports any `missing`, `invalid`, or `degraded` date — i.e. `partial_run` —
+1. Merge the per-day results from `analyze collect` (§5d). If it reports any
+   `missing`, `invalid`, `degraded` or `unknown` date — i.e. `partial_run` —
    mark the run **partial** and default to blocking apply (see error handling
    below).
 2. Render each day's GENERATED Markdown from the day template in
@@ -517,16 +538,30 @@ Full rules: `references/interaction-flow.md`, `references/code-analysis-rules.md
 | Directory layout, day/index markers, create/overwrite, migration | `references/worklog-format.md` |
 | Per-host models, overrides, unavailable-model handling, escalation | `references/provider-models.md` |
 
+The analysis pipeline is driven by the CLI (§5). Run it as
+`python3 -m git_worklog <command>` from this directory — no install needed, same
+as the scripts:
+
+| Command | Role |
+|---------|------|
+| `analyze prepare` | Mint a run; write one manifest per day (what to analyse, in which language, which files are required, where to write the result) |
+| `analyze collect` | Read the run's results back and check them: schema, language, evidence accuracy, coverage, missing/unknown days |
+| `doctor` | Is this environment able to run the tool? |
+| `validate` | Is the worklog on disk well-formed? |
+| `version` | CLI / layout / config-schema versions |
+
+The rest of the deterministic work is still scripts:
+
 | Script | Role |
 |--------|------|
 | `resolve_provider_model.py` | Resolve the per-host subagent provider/model (single source `config/provider_models.json`; overrides, escalation, halt-and-ask) |
 | `resolve_date_range.py` | Parse/validate dates, timezone, day-span limit (`--max-days`, default 30), per-day bounds |
 | `resolve_ref_range.py` | Report mode: resolve a tag/ref to its authoritative commit set + derived dates |
 | `check_worklog_coverage.py` | Report mode: per-date coverage — `covered` / `gap` / `no-commits` |
-| `collect_git_history.py` | Repo metadata + per-day commit facts (no summaries, no author filter) |
-| `inspect_worktree.py` | Staged/unstaged/untracked + worktree fingerprint (include_uncommitted only) |
-| `build_analysis_manifest.py` | Group changed files, propose required context, flag large days |
-| `collect_day_results.py` | Mint the run's result dir + per-date paths; read back and validate each Day Subagent's written JSON (missing/invalid → that day failed) |
+| `collect_git_history.py` | Repo metadata + per-day commit facts (no summaries, no author filter); `--info-only` for §4 |
+| `inspect_worktree.py` | Staged/unstaged/untracked + worktree fingerprint on its own (`analyze prepare --include-uncommitted` does this for a run) |
+| `build_analysis_manifest.py` | One day's manifest from history JSON on stdin (`analyze prepare` does this for a whole range) |
+| `collect_day_results.py` | Read back and validate results in a flat run dir. Cannot check coverage — it never sees a manifest, so it does not pretend to. Prefer `analyze collect` |
 | `update_daily_worklog.py` | Simulate/apply per-day files (create/overwrite/no-change); preserve MANUAL; transactional write |
 | `rebuild_worklog_index.py` | Rebuild `index.md` from day files (descending, summaries); preserve index MANUAL; atomic write |
 | `validate_daily_worklog.py` | Per-day file marker/title/UTF-8 validation |
