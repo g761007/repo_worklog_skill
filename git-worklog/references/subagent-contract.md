@@ -547,9 +547,15 @@ OUTPUT
     {"commit": "abc1234", "file": "src/cache.py", "symbol": "CacheLayer.get",
      "lines": "42-58", "note": "新增快取查詢，miss 時回源"}
   commit and file are REQUIRED; symbol and lines are expected wherever the
-  change touches code. This is validated — a result whose evidence is prose, or
-  is missing commit/file, is rejected and the day is marked failed. Evidence
-  must come from the day's tree (step 2), never from the current checkout.
+  change touches code. All four are CHECKED against the tree of the commit you
+  cite: the commit must exist, the file must have existed at that commit, the
+  symbol must appear in it, and the line range must be inside it. A citation
+  that does not resolve fails the day and blocks the whole run — the same
+  outcome as prose evidence, because a name that leads nowhere is worth exactly
+  as much. Do not reach for a plausible name: `migrate_directory` for a function
+  actually called `parse_legacy`, or `preview_dir` for `previews_dir`, reads
+  perfectly and is a fabrication (#15). Read the name, then cite it. A file that
+  exists in the checkout may not have existed at the commit you are citing.
 - tests[] says what the tests COVER, not how many exist. Name the file and the
   behaviour it pins:
     "tests/test_git_collection.py — merge 偵測、revert 候選、rename/copy、空 repo"

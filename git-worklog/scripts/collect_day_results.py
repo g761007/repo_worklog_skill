@@ -40,6 +40,8 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import subprocess
 import sys
 from datetime import datetime
 
@@ -123,8 +125,63 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
-def _validate_evidence(entries, where: str) -> list[dict]:
-    """Evidence must be checkable citations, not prose."""
+# An identifier inside a `symbol` field. Short tokens are ignored: `get` in
+# `CacheLayer.get` says nothing, and a qualified name never appears verbatim in
+# source anyway (the file holds `class CacheLayer:` and `def get`), so the field
+# is checked token by token rather than as one string.
+_SYMBOL_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
+
+
+class _Tree:
+    """Reads files as they were at a commit, and remembers what it read.
+
+    Evidence must be checked against the day's tree, never the checkout: the
+    working tree holds every change made since, so a symbol that exists today
+    proves nothing about the day being described. One subprocess per distinct
+    (commit, file) — a day's evidence cites the same few files repeatedly.
+    """
+
+    def __init__(self, repo: str):
+        self.repo = repo
+        self._files: dict = {}
+        self._commits: dict = {}
+        self._shallow = None
+
+    def _git(self, *args) -> "tuple[int, str]":
+        p = subprocess.run(["git", "-C", self.repo, *args],
+                           capture_output=True, text=True)
+        return p.returncode, p.stdout
+
+    def is_shallow(self) -> bool:
+        if self._shallow is None:
+            _, out = self._git("rev-parse", "--is-shallow-repository")
+            self._shallow = out.strip() == "true"
+        return self._shallow
+
+    def has_commit(self, commit: str) -> bool:
+        if commit not in self._commits:
+            code, _ = self._git("cat-file", "-e", f"{commit}^{{commit}}")
+            self._commits[commit] = code == 0
+        return self._commits[commit]
+
+    def file_at(self, commit: str, path: str) -> "str | None":
+        key = (commit, path)
+        if key not in self._files:
+            code, out = self._git("show", f"{commit}:{path}")
+            self._files[key] = out if code == 0 else None
+        return self._files[key]
+
+
+def _validate_evidence(entries, where: str, tree: "_Tree | None" = None) -> list[dict]:
+    """Evidence must be checkable citations, not prose — and must check out.
+
+    Presence of ``commit`` and ``file`` was all this ever enforced, which left
+    ``symbol`` and ``lines`` decorative: a real run cited `migrate_directory`
+    for a function actually called `parse_legacy`, `preview_dir` for
+    `previews_dir`, and a line range past the end of the file — and all of it
+    passed (issue #15). Every fabrication was a *plausible* name, which is
+    precisely why reading cannot catch them and why this has to be mechanical.
+    """
     if entries is None:
         return []
     if not isinstance(entries, list):
@@ -132,13 +189,14 @@ def _validate_evidence(entries, where: str) -> list[dict]:
                  "message": f"{where} must be an array."}]
     issues: list[dict] = []
     for idx, e in enumerate(entries):
+        at = f"{where}[{idx}]"
         if not isinstance(e, dict):
             issues.append({
                 "code": "EVIDENCE_INVALID",
-                "message": f"{where}[{idx}] must be an object with at least "
+                "message": f"{at} must be an object with at least "
                            f"{REQUIRED_EVIDENCE_KEYS}; prose is not evidence "
                            f"(got {type(e).__name__}).",
-                "path": f"{where}[{idx}]",
+                "path": at,
             })
             continue
         missing = [k for k in REQUIRED_EVIDENCE_KEYS
@@ -146,9 +204,76 @@ def _validate_evidence(entries, where: str) -> list[dict]:
         if missing:
             issues.append({
                 "code": "EVIDENCE_INVALID",
-                "message": f"{where}[{idx}] is missing: {', '.join(missing)}.",
-                "path": f"{where}[{idx}]",
+                "message": f"{at} is missing: {', '.join(missing)}.",
+                "path": at,
                 "missing_keys": missing,
+            })
+            continue
+        if tree is not None:
+            issues.extend(_verify_against_tree(e, at, tree))
+    return issues
+
+
+def _verify_against_tree(e: dict, at: str, tree: _Tree) -> list[dict]:
+    """Check one evidence entry against the repository it cites."""
+    commit = str(e["commit"]).strip()
+    path = str(e["file"]).strip()
+
+    if not tree.has_commit(commit):
+        # A missing commit in a shallow clone is the environment's doing, not
+        # the subagent's, and failing the day for it would punish the wrong
+        # party. In a full clone there is no such excuse: the hash is invented.
+        if tree.is_shallow():
+            return [{
+                "code": "EVIDENCE_UNVERIFIABLE",
+                "message": f"{at} cites commit {commit}, which this shallow "
+                           f"clone does not have, so its evidence could not be "
+                           f"checked. `git fetch --unshallow` to verify it.",
+                "path": at, "commit": commit,
+            }]
+        return [{
+            "code": "EVIDENCE_COMMIT_UNKNOWN",
+            "message": f"{at} cites commit {commit}, which is not in this "
+                       f"repository.",
+            "path": at, "commit": commit,
+        }]
+
+    src = tree.file_at(commit, path)
+    if src is None:
+        return [{
+            "code": "EVIDENCE_FILE_NOT_IN_COMMIT",
+            "message": f"{at} cites {path} at commit {commit}, but that commit's "
+                       f"tree has no such file. A file that exists today may not "
+                       f"have existed then.",
+            "path": at, "commit": commit, "file": path,
+        }]
+
+    issues: list[dict] = []
+    symbol = str(e.get("symbol") or "").strip()
+    if symbol:
+        absent = [t for t in _SYMBOL_TOKEN_RE.findall(symbol) if t not in src]
+        if absent:
+            issues.append({
+                "code": "EVIDENCE_SYMBOL_NOT_FOUND",
+                "message": f"{at} cites symbol {symbol!r} in {path} at {commit}, "
+                           f"but {', '.join(repr(a) for a in absent)} does not "
+                           f"appear there. Cite what the code is actually called.",
+                "path": at, "commit": commit, "file": path,
+                "symbol": symbol, "absent": absent,
+            })
+
+    lines = str(e.get("lines") or "").strip()
+    m = re.match(r"^(\d+)\s*-\s*(\d+)$", lines) if lines else None
+    if m:
+        lo, hi = int(m.group(1)), int(m.group(2))
+        total = len(src.splitlines())
+        if lo < 1 or hi > total or lo > hi:
+            issues.append({
+                "code": "EVIDENCE_LINES_OUT_OF_RANGE",
+                "message": f"{at} cites lines {lines} of {path} at {commit}, "
+                           f"which has {total} line(s).",
+                "path": at, "commit": commit, "file": path,
+                "lines": lines, "file_lines": total,
             })
     return issues
 
@@ -185,7 +310,8 @@ def _validate_language(obj, expected: "str | None") -> list[dict]:
     return issues
 
 
-def _validate(obj, date: str, expected_language: "str | None" = None) -> list[dict]:
+def _validate(obj, date: str, expected_language: "str | None" = None,
+              tree: "_Tree | None" = None) -> list[dict]:
     """Structural check against the §6 return schema. Returns issue dicts."""
     issues: list[dict] = []
     if not isinstance(obj, dict):
@@ -224,7 +350,7 @@ def _validate(obj, date: str, expected_language: "str | None" = None) -> list[di
                        f"(got {confidence!r}).",
         })
 
-    issues.extend(_validate_evidence(obj.get("evidence"), "evidence"))
+    issues.extend(_validate_evidence(obj.get("evidence"), "evidence", tree))
 
     work_items = obj.get("work_items")
     if work_items is not None and not isinstance(work_items, list):
@@ -249,7 +375,7 @@ def _validate(obj, date: str, expected_language: "str | None" = None) -> list[di
                 })
             issues.extend(
                 _validate_evidence(item.get("evidence"),
-                                   f"work_items[{idx}].evidence"))
+                                   f"work_items[{idx}].evidence", tree))
     return issues
 
 
@@ -259,6 +385,13 @@ def cmd_read(args: argparse.Namespace) -> int:
     if not os.path.isdir(run_dir):
         _fail("RUN_DIR_MISSING", f"No such analysis run directory: {run_dir}.",
               run_dir=run_dir)
+
+    tree = _Tree(args.repo)
+    if not tree.has_commit("HEAD"):
+        _fail("NOT_A_GIT_REPO",
+              f"{args.repo} is not a readable Git repository, so evidence "
+              f"cannot be checked against the commits it cites.",
+              repo=args.repo)
 
     expected_language = None
     if args.language:
@@ -292,7 +425,7 @@ def cmd_read(args: argparse.Namespace) -> int:
                             "message": f"Could not read result file: {exc}"})
             continue
 
-        issues = _validate(obj, date, expected_language)
+        issues = _validate(obj, date, expected_language, tree)
         if issues:
             invalid.append({"date": date, "path": path,
                             "code": issues[0]["code"],
@@ -359,6 +492,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "~/.git-worklog/analysis/<run_id>).")
 
     r = sub.add_parser("read", help="Read and validate the run's result files.")
+    r.add_argument("--repo", required=True,
+                   help="Repository the evidence cites. Every entry is checked "
+                        "against the tree of the commit it names — not the "
+                        "checkout, which holds everything changed since.")
     r.add_argument("--language", default=None,
                    help="The manifest's resolved language. Each result must "
                         "declare this exact tag; omit only when collecting a "
