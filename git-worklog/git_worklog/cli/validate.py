@@ -7,8 +7,8 @@ never disagree with what update/rebuild would produce.
 
 Roadmap §12.1 also lists preview records, analysis results and evidence links.
 Those are reported as ``skipped`` rather than quietly dropped: they are transient
-user-level state, and their validators live in preview_state.py /
-collect_day_results.py, which run inside a pipeline where the run id is known. A
+user-level state, and their validators live in ``git_worklog.preview`` /
+``analysis.results``, which run inside a pipeline where the run id is known. A
 result's language is checked there too, against the manifest that asked for it --
 a worklog directory has no manifest in scope to check against.
 """
@@ -223,11 +223,11 @@ def run(args) -> "tuple[dict, int]":
         "warnings": warnings,
         "skipped": [
             {"check": "preview_records",
-             "reason": "Transient user-level state; validated by preview_state.py "
-                       "at apply time, where the run's preview_id is known."},
+             "reason": "Transient user-level state; validated by `git-worklog apply` "
+                       "against the record itself, where the preview_id is known."},
             {"check": "analysis_results",
-             "reason": "Transient user-level state; validated by collect_day_results.py "
-                       "within a run, where the run_dir is known."},
+             "reason": "Transient user-level state; validated by `git-worklog analyze "
+                       "collect` within a run, where the run_dir is known."},
             {"check": "result_language",
              "reason": "Analysis results are transient user-level state; their "
                        "language is checked by collect_day_results.py against the "

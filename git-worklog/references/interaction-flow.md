@@ -166,9 +166,10 @@ sections 4–7), which always ends in a dry-run.
 ## 6. Dry-run summary
 
 Every valid request produces a **preview only**. After merging the per-day
-results, simulate the day-file writes with `update_daily_worklog.py` and the
-index rebuild with `rebuild_worklog_index.py` (both without `--apply`), then show
-the user a summary that includes at least all of the following fields:
+results, hand the rendered days to `git-worklog preview --run-id <run_id>`, which
+plans the day-file writes and the index rebuild, stores the result, and touches
+nothing. Then show the user a summary that includes at least all of the
+following fields:
 
 - repository root
 - current branch
@@ -213,14 +214,15 @@ Subagent configuration:
 - 2026-07-15: GPT-5.6 Luna
 ```
 
-`update_daily_worklog.py` (dry-run) supplies: `worklog_dir`, `dir_exists`,
-`planned_changes` (each `{date, path, action:"create"|"overwrite"|"no_change",
-manual_preserved}`), `summaries` (one-line index summary per date), `previews`
-(full per-day file text), `preserved_manual_dates`, and `file_hashes`.
-`rebuild_worklog_index.py` (dry-run, given `{"overrides": summaries}`) supplies
-the index `preview`, the descending `dates`, `index_hash`, and
-`preserved_index_manual`. The `preview_id` comes from `preview_state.py create`,
-formatted `rw-YYYYMMDD-<6 hex>`.
+`git-worklog preview` supplies all of it in one object: `preview_id` (formatted
+`rw-YYYYMMDD-<6 hex>`), `files` (each `{path, date, action:"create"|"overwrite"|
+"no_change", sha256}`), `previews` (full per-day file text), `index_preview`,
+`language`, `expires_at`, `not_written` (dates the run analysed that get no
+file), and `warnings`.
+
+The full record — including the complete text of every target file — is written
+to `state_path` under `~/.git-worklog/previews/`. That file, not this
+conversation, is what `apply` reads.
 
 A compact rendering (fuller field list above; per-day counts, files analyzed,
 preserved MANUAL, and the full per-file previews are shown too):
@@ -279,51 +281,49 @@ Anything ambiguous is not a confirmation — re-show or clarify rather than writ
 
 ---
 
-## 8. Apply-time re-verification
+## 8. Apply
 
-On confirmation, before writing, re-detect repository state, re-run
-`inspect_worktree.py` if `include_uncommitted` is set, re-hash the current
-`index.md` and each target day file, re-fingerprint the day-file listing, then
-verify the preview:
+On confirmation:
 
 ```
-python3 scripts/preview_state.py verify --id <preview_id> --mark-applied <<'JSON'
-{"repository": {"root": "...", "branch": "...", "head": "...",
-                "worktree_fingerprint": "..."},
- "worklog": {"index_sha256": "<current or 'missing'>",
-             "day_files": {"2026-07-15": "<current or 'missing'>"},
-             "dir_fingerprint": "<current>"},
- "params": {"timezone": "...", "include_uncommitted": false}}
-JSON
+git-worklog apply --preview-id <preview_id>
 ```
 
-`verify` returns `consistent` (bool), `mismatches[{field,expected,actual}]`,
-`already_applied`, `expired`, `age_seconds`, and `reason`, and exits with code `3`
-when inconsistent. Consistency is checked across: repository root, branch, HEAD,
-working-tree fingerprint, `index.md` content, each target day file, the day-file
-listing, timezone, and `include_uncommitted` — so a changed target day file, a
-changed `index.md`, or an added/removed day file all invalidate the preview. The
-default TTL is 24 hours. Preview state lives in `~/.git-worklog/previews/`,
-outside the repo.
+That is the entire step. **Do not gather state, do not re-render the days, do not
+pass the entries again** — apply has no argument to pass them through, which is
+the guarantee: what it writes is the record, and the record is what the user just
+read.
 
-If `consistent:false` (exit 3) — including `already_applied`, `expired`, or any
-state change since the dry-run — **do not write.** Explain the reason to the user
-and re-run the dry-run to mint a fresh preview. Never apply a stale preview.
+Apply re-checks, on its own, everything the stored payload depends on:
+repository identity, git directory, branch, HEAD, submodule state, the working
+tree (only when the run read it — a run that analysed commits alone cannot be
+changed by an unrelated edit), `index.md`, each target day file, the day-file
+listing, the run's manifests and results, and the project's language settings.
+Any drift and it refuses. It then writes the day files as one all-or-nothing
+transaction and rebuilds `index.md`, under a per-worklog lock so two applies
+cannot interleave. `.git-worklog/` is created now if it was missing.
 
-When `consistent:true`, apply the same entries, then rebuild the index:
+On success it returns `written_dates`, `preserved_manual_dates`, `index_action`
+and `worklog_dir`. Run `validate_daily_worklog.py --dir .git-worklog` and
+`validate_worklog_index.py --dir .git-worklog`, then report the actual update.
 
-```
-python3 scripts/update_daily_worklog.py --dir .git-worklog --apply <<'JSON'
-{"meta": { ... same meta ... }, "entries": { ... same entries as the dry-run ... }}
-JSON
-python3 scripts/rebuild_worklog_index.py --dir .git-worklog --apply
-```
+**On any refusal, do not write.** Explain the reason and build a fresh preview;
+never work around a refusal:
 
-The day-file apply is one all-or-nothing transaction (`written_dates` in its
-output); `rebuild_worklog_index.py --apply` then writes `index.md` atomically.
-`.git-worklog/` is created now if it was missing. Then run
-`validate_daily_worklog.py --dir .git-worklog` and
-`validate_worklog_index.py --dir .git-worklog` and report the actual update.
+| Code | Meaning |
+|---|---|
+| `PREVIEW_STALE` | The world moved. `mismatches[]` names each field. |
+| `PREVIEW_EXPIRED` | Past its TTL (24h by default). |
+| `PREVIEW_ALREADY_APPLIED` | Spent. A preview applies exactly once. |
+| `PREVIEW_CANCELLED` | Retired by `preview --cancel`. |
+| `PREVIEW_FAILED` | An earlier apply failed and was rolled back. Build a new one rather than retrying. |
+| `PREVIEW_INTERRUPTED` | An apply died after confirming, so whether it wrote is unknown. Tell the user to check `.git-worklog/` before anything else. |
+| `APPLY_LOCKED` | Another apply is writing to this worklog. Wait for it; do not force. |
+| `INDEX_WRITE_FAILED` | The day files **were** written; only `index.md` was not. No day data is lost — repair with `rebuild_worklog_index.py --dir .git-worklog --apply`. |
+
+Preview records live in `~/.git-worklog/previews/`, outside the repo.
+`git-worklog preview --show <id> --check` reports a preview's current state
+without writing anything.
 
 ---
 
@@ -333,10 +333,14 @@ If any day's subagent failed, mark the run **partial** and **block apply by
 default** — do not substitute commit messages for the missing analysis, and keep
 the days that did succeed.
 
+`preview` enforces this rather than relying on you to: a partial run is refused
+with `RUN_NOT_COLLECTED`, and a day the run never analysed is refused with
+`UNKNOWN_DATE`.
+
 The user may explicitly choose to write only the successful days. That is a new
-request, not a resumed one: re-run the dry-run with only those dates, which
-produces a **new `preview_id`**. Show the updated planned changes and the new
-preview id, and require confirmation again before applying.
+request, not a resumed one: prepare a run covering only those dates and preview
+it, which produces a **new `preview_id`**. Show the updated planned changes and
+the new preview id, and require confirmation again before applying.
 
 ---
 

@@ -374,24 +374,26 @@ class TestStatePaths(unittest.TestCase):
 
     def setUp(self):
         self.work = tempfile.mkdtemp(prefix="gw_paths_")
+        self.repo = make_history_repo()
 
     def tearDown(self):
         rmtree(self.work)
+        rmtree(self.repo)
 
-    def _preview_id(self, env):
-        fp = {
-            "repository": {"root": "/repo", "branch": "main", "head": "abc123",
-                           "worktree_fingerprint": None},
-            "worklog": {"index_sha256": "idx1", "day_files": {}, "dir_fingerprint": "df1"},
-            "params": {"timezone": "Asia/Taipei", "include_uncommitted": False},
-        }
-        from helpers import run_script
-        d, _, err = run_script("preview_state.py",
-                               ["create", "--now", "2026-07-15T12:00:00+08:00"],
-                               stdin=json.dumps(fp), env=env)
+    def _run_id(self, env):
+        """Mint a run, which is the cheapest thing that writes user-level state.
+
+        Everything under ``~/.git-worklog/`` -- runs, previews, locks -- is
+        ``join(paths.home(), ...)``, so ``home()`` is the whole of what decides
+        the location and one directory proves it for all of them.
+        """
+        d, _, err = run_cli("analyze", "prepare", "--repo", self.repo,
+                            "--from", "2026-07-01", "--to", "2026-07-01",
+                            "--timezone", "Asia/Taipei", "--language", "en",
+                            env=env)
         self.assertIsNotNone(d, err)
         self.assertTrue(d["ok"], err)
-        return d["preview_id"]
+        return d["run_id"]
 
     def test_git_worklog_home_wins_over_home(self):
         # A user who points GIT_WORKLOG_HOME somewhere means it, even on a box
@@ -399,32 +401,32 @@ class TestStatePaths(unittest.TestCase):
         home = os.path.join(self.work, "home")
         explicit = os.path.join(self.work, "explicit")
         os.makedirs(home)
-        pid = self._preview_id({"HOME": home, "GIT_WORKLOG_HOME": explicit})
-        self.assertTrue(os.path.isfile(
-            os.path.join(explicit, "previews", f"{pid}.json")))
+        run_id = self._run_id({"HOME": home, "GIT_WORKLOG_HOME": explicit})
+        self.assertTrue(os.path.isdir(os.path.join(explicit, "analysis", run_id)))
         self.assertFalse(os.path.exists(os.path.join(home, ".git-worklog")))
 
     def test_defaults_under_home_when_unset(self):
         home = os.path.join(self.work, "home2")
         os.makedirs(home)
-        pid = self._preview_id({"HOME": home})
-        self.assertTrue(os.path.isfile(
-            os.path.join(home, ".git-worklog", "previews", f"{pid}.json")))
+        run_id = self._run_id({"HOME": home})
+        self.assertTrue(os.path.isdir(
+            os.path.join(home, ".git-worklog", "analysis", run_id)))
 
     def test_state_never_lands_in_the_repository(self):
         # Working state in the repo would pollute the very history the tool reads.
         home = os.path.join(self.work, "home3")
         os.makedirs(home)
-        self._preview_id({"HOME": home})
+        self._run_id({"HOME": home})
         self.assertFalse(os.path.exists(
-            os.path.join(ROOT, ".git-worklog", "previews")))
+            os.path.join(self.repo, ".git-worklog", "analysis")))
 
     @unittest.skipUnless(os.name == "posix", "POSIX permissions only")
     def test_created_state_dir_is_owner_only(self):
+        # §5.1. These files quote source and diffs from private repositories.
         home = os.path.join(self.work, "home4")
         os.makedirs(home)
-        self._preview_id({"HOME": home})
-        created = os.path.join(home, ".git-worklog", "previews")
+        run_id = self._run_id({"HOME": home})
+        created = os.path.join(home, ".git-worklog", "analysis", run_id)
         self.assertEqual(os.stat(created).st_mode & 0o777, 0o700)
 
 

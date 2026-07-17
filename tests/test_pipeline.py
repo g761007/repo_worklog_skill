@@ -1,143 +1,181 @@
-"""Integration test: the deterministic script pipeline the skill runs end to end.
+"""Integration test: the whole CLI pipeline, over a real multi-day history.
 
-resolve_date_range -> collect_git_history -> build_analysis_manifest
--> update_daily_worklog (dry-run) -> rebuild_worklog_index (dry-run w/ overrides)
--> preview_state create/verify -> update_daily_worklog --apply
--> rebuild_worklog_index --apply -> validate_daily_worklog + validate_worklog_index.
-Day summaries are synthesised (real runs get them from Day Subagents) to exercise
-the JSON hand-offs between scripts.
+    analyze prepare -> (the agent's LLM, stubbed) -> analyze collect
+    -> preview -> apply -> validate
+
+The stub between prepare and collect is the point of the architecture, not a
+shortcut: reading patches and writing prose is the hosting agent's job (§6.1),
+and everything on either side of it is deterministic and therefore testable.
+What this test holds is that the hand-offs line up — a manifest's required files
+are the ones a result must account for, a collected run is what a preview will
+build from, and a preview is what apply writes.
+
+test_preview.py covers the refusals in depth on a one-day fixture. This one is
+here for breadth: several days, a revert, a rename, a binary file, and days with
+no commits at all, all the way to a validated worklog on disk.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
+import subprocess
 import tempfile
 import unittest
-from pathlib import Path
 
-from helpers import make_history_repo, run_script, rmtree, wm
+from helpers import make_history_repo, run_cli, run_script, rmtree, wm
+
+# make_history_repo's timeline. 07-10 carries three commits including a revert;
+# 07-12 carries a rename plus a binary file; the days between carry nothing.
+_COMMIT_DAYS = {"2026-07-01", "2026-07-10", "2026-07-12"}
 
 
-def _sha(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+def _empty_result(manifest: dict) -> dict:
+    """What a Day Subagent returns for a day with no commits.
+
+    A quiet day still gets dispatched and still answers, because "nothing
+    happened" and "the subagent never came back" are different facts and only
+    the day itself can tell them apart. Skipping the result here would make
+    `collect` report the day as `missing` — correctly.
+    """
+    return {
+        "date": manifest["date"], "timezone": manifest["timezone"],
+        "language": "zh-TW", "status": "complete", "confidence": "verified",
+        "escalation_recommended": False, "escalation_reasons": [],
+        "has_changes": False, "commits": [], "work_items": [],
+        "fixes": [], "refactors": [], "tests": [], "database_changes": [],
+        "configuration_changes": [], "deployment_changes": [],
+        "uncommitted_changes": [], "handoff_notes": [], "uncertainties": [],
+        "evidence": [],
+    }
 
 
-def worklog_fingerprint(worklog_dir: str, target_dates: list[str]) -> dict:
-    """Mirror what the orchestrator records for a multi-file preview."""
-    index_path = os.path.join(worklog_dir, "index.md")
-    index_sha = _sha(Path(index_path).read_text(encoding="utf-8")) \
-        if os.path.exists(index_path) else "missing"
-    day_files = {}
-    for date in target_dates:
-        p = os.path.join(worklog_dir, f"{date}.md")
-        day_files[date] = _sha(Path(p).read_text(encoding="utf-8")) if os.path.exists(p) else "missing"
-    listing = sorted(n for n in (os.listdir(worklog_dir) if os.path.isdir(worklog_dir) else [])
-                     if n.endswith(".md") and n != "index.md")
-    return {"index_sha256": index_sha, "day_files": day_files,
-            "dir_fingerprint": _sha("\n".join(listing))}
+def _result_for(manifest: dict) -> dict:
+    """A result a Day Subagent could plausibly have returned for this manifest.
+
+    Built *from* the manifest rather than hard-coded, so the test cannot drift
+    into asserting against files the run never asked about. Every required file
+    is accounted for in ``files[]`` and every cited commit/file pair is one Git
+    really has — which is what `collect` checks.
+    """
+    date = manifest["date"]
+    all_pairs = manifest.get("required_commit_file_pairs") or []
+    # `required` is False for pairs the day does not have to account for — a
+    # file the day's own revert deleted again, for instance. Cover the ones that
+    # are required and cite the rest anyway, which is what a thorough day looks
+    # like.
+    required = [p for p in all_pairs if p.get("required")]
+    commits = [c["short_hash"] for c in manifest["commits"]]
+    return {
+        "date": date, "timezone": manifest["timezone"], "language": "zh-TW",
+        "status": "complete", "confidence": "verified",
+        "escalation_recommended": False, "escalation_reasons": [],
+        "has_changes": True, "commits": commits,
+        "work_items": [{
+            "title": f"{date} 的變更", "summary": "s", "behavior_change": "b",
+            "implementation": "i", "impact": "im",
+            "files": sorted({p["file"] for p in all_pairs}),
+            "commits": commits, "tests": [], "risks": [],
+            "maintenance_notes": [], "follow_ups": [], "confidence": "verified",
+            "evidence": [{"commit": p["commit"], "file": p["file"],
+                          "note": "changed here"} for p in required],
+        }],
+        "fixes": [], "refactors": [], "tests": [], "database_changes": [],
+        "configuration_changes": [], "deployment_changes": [],
+        "uncommitted_changes": [], "handoff_notes": [], "uncertainties": [],
+        "evidence": [],
+    }
 
 
 class TestPipeline(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.repo = make_history_repo()
+    def setUp(self):
+        self.repo = make_history_repo()
+        self.home = tempfile.mkdtemp(prefix="rw_pl_home_")
+        self.work = tempfile.mkdtemp(prefix="rw_pl_")
+        self.wdir = os.path.join(self.work, wm.WORKLOG_DIRNAME)
+        self.env = {"GIT_WORKLOG_HOME": self.home}
 
-    @classmethod
-    def tearDownClass(cls):
-        rmtree(cls.repo)
+    def tearDown(self):
+        for path in (self.repo, self.home, self.work):
+            rmtree(path)
 
-    def test_full_pipeline(self):
-        resolved, _, _ = run_script(
-            "resolve_date_range.py",
-            ["--from", "2026-07-01", "--to", "2026-07-12", "--timezone", "Asia/Taipei"])
-        self.assertEqual(resolved["days_count"], 12)
+    def _preview(self, run_id: str, entries: dict):
+        env = os.environ.copy()
+        env.update(self.env)
+        env["PYTHONPATH"] = __import__("helpers").SKILL_ROOT
+        p = subprocess.run(
+            ["python3", "-m", "git_worklog", "preview", "--run-id", run_id,
+             "--repo", self.repo, "--dir", self.wdir],
+            input=json.dumps({"entries": entries}), capture_output=True,
+            text=True, env=env)
+        return json.loads(p.stdout), p.returncode, p.stderr
 
-        info, _, _ = run_script("collect_git_history.py", ["--repo", self.repo, "--info-only"])
-        self.assertTrue(info["repository"]["has_commits"])
+    def test_prepare_to_applied_worklog(self):
+        prep, rc, err = run_cli("analyze", "prepare", "--repo", self.repo,
+                                "--from", "2026-07-01", "--to", "2026-07-12",
+                                "--timezone", "Asia/Taipei", "--language", "zh-TW",
+                                "--language-source", "user-request", env=self.env)
+        self.assertTrue(prep["ok"], err)
+        self.assertEqual(len(prep["tasks"]), 12)
+        with_changes = {t["date"] for t in prep["tasks"] if t["has_changes"]}
+        self.assertEqual(with_changes, _COMMIT_DAYS)
+        self.assertEqual(
+            next(t["commit_count"] for t in prep["tasks"] if t["date"] == "2026-07-10"),
+            3, "the revert day's three commits must all reach the manifest")
 
+        # The stub stands in for the agent's LLM. Every dispatched day answers,
+        # including the quiet ones; only the days with commits get a file.
         entries = {}
-        commit_days = {}
-        for day in resolved["dates"]:
-            hist, _, _ = run_script("collect_git_history.py",
-                                    ["--repo", self.repo,
-                                     "--since", day["start"], "--until", day["end"]])
-            man, rc, err = run_script(
-                "build_analysis_manifest.py",
-                ["--date", day["date"], "--timezone", "Asia/Taipei"],
-                stdin=json.dumps(hist))
-            self.assertTrue(man["ok"], err)
-            if man["has_changes"]:
-                commit_days[day["date"]] = man["commit_count"]
-                groups = ", ".join(g["group"] for g in man["file_groups"])
-                entries[day["date"]] = {
-                    "generated_markdown": f"## 當日摘要\n\n{man['commit_count']} commit(s): {groups}."}
+        for task in prep["tasks"]:
+            with open(task["manifest_path"], encoding="utf-8") as fh:
+                manifest = json.load(fh)
+            result = (_result_for(manifest) if task["has_changes"]
+                      else _empty_result(manifest))
+            with open(task["result_path"], "w", encoding="utf-8") as fh:
+                json.dump(result, fh, ensure_ascii=False)
+            if not task["has_changes"]:
+                continue
+            entries[task["date"]] = {"generated_markdown": (
+                "## 當日摘要\n"
+                "<!-- GIT_WORKLOG:SUMMARY:START -->\n"
+                f"{task['date']}：{task['commit_count']} 個 commit。\n"
+                "<!-- GIT_WORKLOG:SUMMARY:END -->\n")}
 
-        self.assertEqual(set(commit_days), {"2026-07-01", "2026-07-10", "2026-07-12"})
-        self.assertEqual(commit_days["2026-07-10"], 3)
+        coll, rc, err = run_cli("analyze", "collect", "--run-id", prep["run_id"],
+                                "--repo", self.repo, env=self.env)
+        self.assertTrue(coll["ok"], err)
+        self.assertFalse(coll["partial_run"],
+                         f"missing={coll['missing']} invalid={coll['invalid']}")
+        # Every dispatched day came back, quiet ones included: `complete` is
+        # about the answer arriving, not about the day having had commits.
+        self.assertEqual(len(coll["complete"]), 12)
+        self.assertEqual(coll["missing"], [])
+        self.assertEqual(rc, 0)
 
-        work = tempfile.mkdtemp(prefix="rw_pl_")
-        home = tempfile.mkdtemp(prefix="rw_plhome_")
-        target_dates = sorted(entries, reverse=True)
-        try:
-            wdir = os.path.join(work, wm.WORKLOG_DIRNAME)
-            meta = {"timezone": "Asia/Taipei",
-                    "branch": info["repository"]["branch"],
-                    "head": info["repository"]["short_head"]}
-            payload = json.dumps({"meta": meta,
-                                  "entries": entries})
+        pv, rc, err = self._preview(prep["run_id"], entries)
+        self.assertTrue(pv["ok"], err)
+        self.assertEqual({f["action"] for f in pv["files"]}, {"create"})
+        self.assertFalse(os.path.isdir(self.wdir), "the preview created files")
+        # The nine commitless days were analysed and deliberately not written.
+        self.assertEqual(len(pv["not_written"]), 9)
 
-            dry, _, _ = run_script("update_daily_worklog.py", ["--dir", wdir], stdin=payload)
-            self.assertEqual(dry["mode"], "dry-run")
-            self.assertEqual({p["action"] for p in dry["planned_changes"]}, {"create"})
-            self.assertFalse(os.path.isdir(wdir))
+        ap, rc, err = run_cli("apply", "--preview-id", pv["preview_id"], env=self.env)
+        self.assertTrue(ap["ok"], err)
+        self.assertEqual(sorted(ap["written_dates"], reverse=True),
+                         ["2026-07-12", "2026-07-10", "2026-07-01"])
 
-            # Index dry-run reflects the pending day files via overrides.
-            idx_dry, _, _ = run_script("rebuild_worklog_index.py", ["--dir", wdir],
-                                       stdin=json.dumps({"overrides": dry["summaries"]}))
-            self.assertEqual(idx_dry["dates"], ["2026-07-12", "2026-07-10", "2026-07-01"])
+        vd, _, _ = run_script("validate_daily_worklog.py", ["--dir", self.wdir])
+        self.assertTrue(vd["ok"], vd)
+        self.assertEqual(vd["file_count"], 3)
+        vi, _, _ = run_script("validate_worklog_index.py", ["--dir", self.wdir])
+        self.assertTrue(vi["ok"], vi)
+        self.assertEqual(vi["errors"], [])
 
-            fp = {"repository": {"root": info["repository"]["root"],
-                                 "branch": info["repository"]["branch"],
-                                 "head": info["repository"]["head"],
-                                 "worktree_fingerprint": None},
-                  "worklog": worklog_fingerprint(wdir, target_dates),
-                  "params": {"timezone": "Asia/Taipei", "include_uncommitted": False}}
-            pv, _, _ = run_script("preview_state.py",
-                                  ["create", "--now", "2026-07-15T12:00:00+08:00"],
-                                  stdin=json.dumps(fp), env={"HOME": home})
-            pid = pv["preview_id"]
-
-            verify_state = {"repository": fp["repository"],
-                            "worklog": worklog_fingerprint(wdir, target_dates),
-                            "params": fp["params"]}
-            vr, rc, _ = run_script(
-                "preview_state.py",
-                ["verify", "--id", pid, "--mark-applied", "--now", "2026-07-15T12:01:00+08:00"],
-                stdin=json.dumps(verify_state), env={"HOME": home})
-            self.assertTrue(vr["consistent"])
-
-            ap, _, err = run_script("update_daily_worklog.py", ["--dir", wdir, "--apply"],
-                                    stdin=payload)
-            self.assertTrue(ap["ok"], err)
-            self.assertEqual(sorted(ap["written_dates"], reverse=True),
-                             ["2026-07-12", "2026-07-10", "2026-07-01"])
-
-            idx_ap, _, err = run_script("rebuild_worklog_index.py", ["--dir", wdir, "--apply"],
-                                        stdin="")
-            self.assertTrue(idx_ap["ok"], err)
-            self.assertEqual(idx_ap["dates"], ["2026-07-12", "2026-07-10", "2026-07-01"])
-
-            vd, _, _ = run_script("validate_daily_worklog.py", ["--dir", wdir])
-            self.assertTrue(vd["ok"])
-            self.assertEqual(vd["file_count"], 3)
-            vi, _, _ = run_script("validate_worklog_index.py", ["--dir", wdir])
-            self.assertTrue(vi["ok"])
-            self.assertEqual(vi["errors"], [])
-        finally:
-            rmtree(work)
-            rmtree(home)
+        # The index is navigation over exactly the days that were written.
+        with open(os.path.join(self.wdir, "index.md"), encoding="utf-8") as fh:
+            index = fh.read()
+        for date in sorted(_COMMIT_DAYS):
+            self.assertIn(f"[{date}](./days/{date}.md)", index)
 
 
 if __name__ == "__main__":

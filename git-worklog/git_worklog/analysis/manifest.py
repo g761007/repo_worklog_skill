@@ -16,7 +16,9 @@ import os
 
 from git_worklog import config, language
 from git_worklog import markers as wm
-from git_worklog.analysis import SCHEMA_VERSION, AnalysisError  # noqa: F401
+from git_worklog.analysis import (  # noqa: F401
+    RESULTS_SUBDIR, SCHEMA_VERSION, TASKS_SUBDIR, AnalysisError,
+)
 
 # Number of changed files above which a day is flagged as "large" and the Day
 # Subagent is advised to fan out into Code Analysis Subagents.
@@ -286,6 +288,51 @@ def required_files(manifest: dict) -> "set[str]":
             if p.get("required")}
 
 
+def load_tasks(run_dir: str) -> dict:
+    """Read back what a run asked for, from the manifests it dispatched.
+
+    The tasks are the run's own record of its scope, which is why both `collect`
+    and `preview` read them rather than taking a caller-supplied date list: a day
+    could otherwise be dropped from a run simply by leaving it out of the second
+    command -- the exact failure `missing` exists to catch.
+    """
+    tasks_dir = os.path.join(run_dir, TASKS_SUBDIR)
+    if not os.path.isdir(tasks_dir):
+        raise AnalysisError(
+            "RUN_NOT_PREPARED",
+            f"{run_dir} has no {TASKS_SUBDIR}/ directory, so there is nothing to "
+            f"collect against. Was this run created by `analyze prepare`?",
+            run_dir=run_dir)
+
+    dates, resolved_language = [], None
+    required_by_date, manifests = {}, {}
+    for name in sorted(os.listdir(tasks_dir)):
+        if not name.endswith(".json"):
+            continue
+        with open(os.path.join(tasks_dir, name), "r", encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        date = manifest["date"]
+        dates.append(date)
+        manifests[date] = manifest
+        required_by_date[date] = required_files(manifest)
+        block = manifest.get("language") or {}
+        if block.get("resolved"):
+            resolved_language = block["resolved"]
+    if not dates:
+        raise AnalysisError("RUN_HAS_NO_TASKS",
+                            f"{tasks_dir} contains no manifests.", run_dir=run_dir)
+
+    return {
+        "run_dir": run_dir,
+        "tasks_dir": tasks_dir,
+        "results_dir": os.path.join(run_dir, RESULTS_SUBDIR),
+        "dates": dates,
+        "language": resolved_language,
+        "required_by_date": required_by_date,
+        "manifests": manifests,
+    }
+
+
 def _repository_block(history: "dict | None") -> "dict | None":
     """The §8 repository block, taken from the history payload's own metadata."""
     info = (history or {}).get("repository")
@@ -304,12 +351,14 @@ def build(date: str, timezone: str, history: "dict | None" = None,
           provider: str = "anthropic", model: "dict | None" = None,
           lang: "language.Resolution | None" = None,
           run_id: "str | None" = None,
-          result_path: "str | None" = None) -> dict:
+          result_path: "str | None" = None,
+          parts_dir: "str | None" = None) -> dict:
     """Assemble one day's manifest from that day's collected Git facts.
 
-    ``run_id`` and ``result_path`` are known only to a caller that minted a run
-    (``analyze prepare``), so they are optional: a manifest built ad hoc for one
-    day is still a valid manifest, it just does not belong to a run yet.
+    ``run_id``, ``result_path`` and ``parts_dir`` are known only to a caller
+    that minted a run (``analyze prepare``), so they are optional: a manifest
+    built ad hoc for one day is still a valid manifest, it just does not belong
+    to a run yet.
     """
     if history and not history.get("ok", True):
         raise AnalysisError("BAD_HISTORY_INPUT",
@@ -369,4 +418,11 @@ def build(date: str, timezone: str, history: "dict | None" = None,
         "large_day": is_large,
         "recommended_code_analysis_subagents": len(groups) if is_large else 0,
         "result_path": result_path,
+        # Where a fan-out's per-group parts go. It is on the manifest because a
+        # Day Subagent is handed a manifest and a result_path and nothing else:
+        # left to derive a sibling path from result_path, it lands in results/,
+        # where every extra file is an `unknown` that fails the whole run. The
+        # day the contract most wants split up is exactly the day that then
+        # cannot be written -- observed on the first real large-day run.
+        "parts_dir": parts_dir,
     }

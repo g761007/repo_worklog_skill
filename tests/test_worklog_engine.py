@@ -1,7 +1,7 @@
 """Tests for the directory-based worklog engine.
 
 Covers worklog_markers (day + index primitives), update_daily_worklog,
-rebuild_worklog_index, the two validators, and preview_state.
+rebuild_worklog_index and the two validators.
 """
 
 from __future__ import annotations
@@ -287,11 +287,11 @@ class TestUpdateDaily(unittest.TestCase):
     def test_transactional_rollback_leaves_no_partial_state(self):
         # A mid-swap failure must restore the overwritten day, drop the created
         # day, and leak no temp files (acceptance criterion: no partial writes).
-        import update_daily_worklog as u
+        from git_worklog import writer
         os.makedirs(self.dir)
         write(day_file(self.dir, "2026-07-15"),
               wm.render_new_day_file("2026-07-15", "## 當日摘要\n\nORIGINAL"))
-        writes = u._plan(self.dir, {
+        writes = writer.plan_days(self.dir, {
             "2026-07-15": {"generated_markdown": "## 當日摘要\n\nNEW"},
             "2026-07-16": {"generated_markdown": "## 當日摘要\n\nBRANDNEW"},
         }, {"timezone": "Asia/Taipei"})
@@ -308,7 +308,7 @@ class TestUpdateDaily(unittest.TestCase):
         os.replace = flaky
         try:
             with self.assertRaises(OSError):
-                u._transactional_apply(self.dir, writes)
+                writer.apply_days(self.dir, writes)
         finally:
             os.replace = real_replace
 
@@ -594,93 +594,6 @@ class TestValidators(unittest.TestCase):
                              ["--target", day_file(self.dir, "2026-07-15")])
         self.assertTrue(v["ok"])
         self.assertEqual(v["date"], "2026-07-15")
-
-
-class TestPreviewState(unittest.TestCase):
-    def setUp(self):
-        self.home = tempfile.mkdtemp(prefix="rw_home_")
-        self.env = {"HOME": self.home}
-        self.fp = {
-            "repository": {"root": "/repo", "branch": "main", "head": "abc123",
-                           "worktree_fingerprint": None},
-            "worklog": {"index_sha256": "idx1",
-                        "day_files": {"2026-07-15": "h15", "2026-07-14": "missing"},
-                        "dir_fingerprint": "df1"},
-            "params": {"timezone": "Asia/Taipei", "include_uncommitted": False},
-        }
-
-    def tearDown(self):
-        rmtree(self.home)
-
-    def _create(self):
-        d, _, _ = run_script("preview_state.py",
-                             ["create", "--now", "2026-07-15T12:00:00+08:00"],
-                             stdin=json.dumps(self.fp), env=self.env)
-        return d["preview_id"]
-
-    def _verify(self, worklog, now="2026-07-15T12:05:00+08:00", mark=False):
-        pid = self._create()
-        state = {"repository": self.fp["repository"], "worklog": worklog,
-                 "params": self.fp["params"]}
-        extra = ["--mark-applied"] if mark else []
-        return run_script("preview_state.py",
-                          ["verify", "--id", pid, "--now", now, *extra],
-                          stdin=json.dumps(state), env=self.env)
-
-    def test_consistent_when_unchanged(self):
-        d, rc, _ = self._verify(self.fp["worklog"])
-        self.assertTrue(d["consistent"])
-        self.assertEqual(rc, 0)
-
-    def test_switching_language_after_the_dry_run_blocks_apply(self):
-        # §6.2.10: a user who confirmed a zh-TW preview and then asked for
-        # English is asking for a different worklog. Apply must refuse and force
-        # a fresh preview rather than write prose nobody previewed.
-        pid = self._create()
-        state = {"repository": self.fp["repository"],
-                 "worklog": self.fp["worklog"],
-                 "params": {**self.fp["params"], "language": "en"}}
-        d, rc, _ = run_script("preview_state.py",
-                              ["verify", "--id", pid,
-                               "--now", "2026-07-15T12:05:00+08:00"],
-                              stdin=json.dumps(state), env=self.env)
-        self.assertFalse(d["consistent"])
-        self.assertEqual(rc, 3)
-        self.assertEqual([m["field"] for m in d["mismatches"]], ["language"])
-        self.assertEqual(d["reason"], "state changed since dry-run")
-
-    def test_same_language_applies_cleanly(self):
-        self.fp["params"]["language"] = "zh-TW"
-        pid = self._create()
-        state = {"repository": self.fp["repository"],
-                 "worklog": self.fp["worklog"],
-                 "params": {"timezone": "Asia/Taipei",
-                            "include_uncommitted": False, "language": "zh-TW"}}
-        d, rc, _ = run_script("preview_state.py",
-                              ["verify", "--id", pid,
-                               "--now", "2026-07-15T12:05:00+08:00"],
-                              stdin=json.dumps(state), env=self.env)
-        self.assertTrue(d["consistent"], d.get("mismatches"))
-        self.assertEqual(rc, 0)
-
-    def test_changed_day_file_blocks(self):
-        wl = {**self.fp["worklog"], "day_files": {"2026-07-15": "CHANGED", "2026-07-14": "missing"}}
-        d, rc, _ = self._verify(wl)
-        self.assertFalse(d["consistent"])
-        self.assertEqual(rc, 3)
-        self.assertTrue(any(m["field"] == "day files" for m in d["mismatches"]))
-
-    def test_directory_listing_change_blocks(self):
-        wl = {**self.fp["worklog"], "dir_fingerprint": "df2"}
-        d, rc, _ = self._verify(wl)
-        self.assertFalse(d["consistent"])
-        self.assertTrue(any(m["field"] == "worklog directory listing" for m in d["mismatches"]))
-
-    def test_index_change_blocks(self):
-        wl = {**self.fp["worklog"], "index_sha256": "idx2"}
-        d, rc, _ = self._verify(wl)
-        self.assertFalse(d["consistent"])
-        self.assertTrue(any(m["field"] == "index.md content" for m in d["mismatches"]))
 
 
 class TestLayout(unittest.TestCase):

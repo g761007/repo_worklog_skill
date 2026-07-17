@@ -24,6 +24,10 @@ LEGACY_HOME_DIRNAME = ".repo_worklog"
 
 PREVIEWS_SUBDIR = "previews"
 ANALYSIS_SUBDIR = "analysis"
+# Apply locks live here (roadmap §5). They are transient by nature -- a lock
+# outliving its process is a bug to detect, not state to keep -- so they sit in
+# tmp/ rather than earning a directory of their own.
+TMP_SUBDIR = "tmp"
 
 # Owner-only: these files quote source code and diffs from private repositories.
 DIR_MODE = 0o700
@@ -48,6 +52,10 @@ def previews_dir() -> str:
 
 def analysis_dir() -> str:
     return os.path.join(home(), ANALYSIS_SUBDIR)
+
+
+def tmp_dir() -> str:
+    return os.path.join(home(), TMP_SUBDIR)
 
 
 def ensure_dir(path: str) -> str:

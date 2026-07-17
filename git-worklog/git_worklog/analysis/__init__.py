@@ -19,6 +19,18 @@ from __future__ import annotations
 
 SCHEMA_VERSION = 1
 
+# A run's on-disk layout (§7.1). Two directories, not one: `collect` can then
+# tell a task that was never answered from a result nobody asked for. They live
+# here rather than in the CLI because `preview` reads the same run and must not
+# guess at the layout the CLI wrote.
+TASKS_SUBDIR = "tasks"
+RESULTS_SUBDIR = "results"
+# Scratch space for a large day's fan-out. Deliberately *not* inside results/:
+# `collect` treats every file there as a day's answer and fails the run over any
+# it did not ask for, so a Day Subagent's per-group parts need somewhere to land
+# that is not policed. See manifest.build's `parts_dir`.
+PARTS_SUBDIR = "parts"
+
 
 class AnalysisError(ValueError):
     """A failure that carries the wire code the CLI and scripts report.

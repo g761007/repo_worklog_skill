@@ -8,6 +8,35 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`git-worklog preview` / `git-worklog apply`** (#6) — a preview is now the
+  artifact, not a receipt for one.
+
+  It used to be a *fingerprint*: a hash of everything that must not change
+  between the dry-run and the apply, while the content itself stayed in the
+  agent's conversation and was handed back at apply time. That proves the world
+  did not move. It cannot prove the bytes written are the bytes the user read —
+  and anything that re-renders in between (a re-run subagent, a dropped message,
+  a different model) produces a worklog nobody approved while every check still
+  passes.
+
+  So `preview --run-id <id>` now stores the complete final text of every file
+  the apply will write, and `apply --preview-id <id>` writes exactly that. The
+  command takes no other input, which is the actual guarantee: there is no
+  argument through which a re-render could arrive.
+
+  Apply re-checks everything the payload depends on before writing — repository
+  identity, git dir, branch, HEAD, submodules, the working tree (only when the
+  run read it), every target day file, `index.md`, the day-file listing, the
+  run's manifests and results, and the project's language settings — and refuses
+  rather than reconciles. `preview` also refuses a partial run outright
+  (`RUN_NOT_COLLECTED`) and a day the run never analysed (`UNKNOWN_DATE`).
+
+  States: `previewed → confirmed → applied`, plus `cancelled`, `failed`, and the
+  computed `expired` / `stale`. `confirmed` is written to disk *before* the first
+  byte, so a process that dies mid-apply leaves evidence rather than a record
+  still claiming nothing happened. Concurrent applies to one worklog are locked
+  out; a lock is broken only when its owner is provably dead.
+
 - **A day's analysis must now account for the source it changed** (#5).
   Manifests carry `required_commit_file_pairs` — every (commit, file) the day
   touched, each flagged required or not — and `analyze collect` fails any day
@@ -182,7 +211,43 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from private repositories. This variable is new, not a rename — there was never
   a `REPO_WORKLOG_HOME`.
 
+### Fixed
+
+- **A large day's fan-out no longer blocks itself** (#6). Manifests gain
+  `parts_dir`, and `analyze prepare` creates `<run_dir>/parts/` for it.
+
+  A Day Subagent is handed a manifest and a `result_path` and nothing else, so
+  when `large_day` led it to split the day into Code Analysis Subagents, it
+  derived their paths from the only path it had — landing them in `results/`,
+  where `collect` reads every file as some day's answer and fails the run over
+  any it did not ask for. The day the contract most wants split up was exactly
+  the day that then could not be written.
+
+  The contract sent it there: §10 said the parts go "under the same `run_dir` …
+  beside the day's result without colliding", which was true when a run was one
+  flat directory and stopped being true when `tasks/` and `results/` were split
+  out. It could not be fixed by rewording, either — `run_dir` was not on the
+  manifest, so the sentence described a path the subagent had no way to build.
+
+  Found by dogfooding this repo's own 28-commit day.
+
+### Removed
+
+- **`scripts/preview_state.py`** (#6) — superseded by `git-worklog preview` /
+  `apply`. Its contract could not survive the immutable record: `create` now
+  needs the payload, and `verify` compared parameters the caller re-supplied,
+  which `apply` no longer accepts. Keeping it would have left two things called
+  "preview" meaning different things, one of which cannot deliver the guarantee
+  the other exists for.
+
 ### Changed
+
+- **The worklog writer moved into the package** (`git_worklog/writer.py`) (#6).
+  `preview` has to compute the exact bytes it stores and `apply` has to write
+  them, but the planning and the transactional write lived in `scripts/`, which
+  an installed CLI cannot reach. `update_daily_worklog.py` and
+  `rebuild_worklog_index.py` are now thin shells over it; their JSON contracts
+  are unchanged.
 
 - **Model override variables are now `GIT_WORKLOG_{ANTHROPIC,OPENAI,GOOGLE}_MODEL`.**
   The `REPO_WORKLOG_*` names shipped publicly in v0.3.0–v0.4.0 and are **still

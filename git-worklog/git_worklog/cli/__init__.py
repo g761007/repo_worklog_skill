@@ -5,7 +5,9 @@ you want *before* trusting anything else, none of which need the analysis
 pipeline. ``analyze prepare``/``collect`` (§7) then bracket the pipeline — they
 decide what must be analysed and check what came back, while the analysis itself
 stays with the hosting agent's LLM. The CLI does not replace it and needs no
-model API key (§6.1). Rendering and applying stay with the skill for now.
+model API key (§6.1). ``preview`` and ``apply`` (§10) close the loop: the first
+turns a collected run plus the agent's prose into a frozen payload, the second
+writes that payload and takes no other input.
 
 Every subcommand prints one JSON object to stdout, matching the scripts'
 contract, so the same parsing works everywhere. ``--text`` switches to a
@@ -111,6 +113,38 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Repository the evidence cites. Every entry is checked "
                            "against the tree of the commit it names — not the "
                            "checkout, which holds everything changed since.")
+
+    pv = sub.add_parser("preview", help="Freeze what an apply would write.")
+    pv.add_argument("--run-id", help="The collected run to preview (from "
+                                     "`analyze prepare`).")
+    pv.add_argument("--run-dir", help="The run directory, if it is not "
+                                      "~/.git-worklog/analysis/<run-id>.")
+    pv.add_argument("--repo", default=".", help="Repository to read (default: cwd).")
+    pv.add_argument("--dir", help=f"Worklog directory (default: <repo>/{wm.WORKLOG_DIRNAME}).")
+    pv.add_argument("--input", help="Rendered day files as JSON, or '-' / omit "
+                                    "for stdin: {\"entries\": {\"<date>\": "
+                                    "{\"generated_markdown\": \"...\"}}}.")
+    # Defaulted by the engine, not here: reading the real default would mean
+    # importing git_worklog.preview (and the writer, and Git) on every run,
+    # including `version`, which this parser is built for too.
+    pv.add_argument("--ttl-seconds", type=int, default=None,
+                    help="How long the preview stays applicable (default: 24h).")
+    pv.add_argument("--show", metavar="PREVIEW_ID",
+                    help="Print a stored preview instead of creating one.")
+    pv.add_argument("--check", action="store_true",
+                    help="With --show, also re-read the repository and worklog "
+                         "to report whether the preview is still applicable.")
+    pv.add_argument("--cancel", metavar="PREVIEW_ID",
+                    help="Retire a preview instead of creating one.")
+    pv.add_argument("--now", help="Override current time (ISO 8601) for "
+                                  "deterministic runs.")
+
+    ap = sub.add_parser("apply", help="Write a preview's stored payload.")
+    ap.add_argument("--preview-id", required=True,
+                    help="The preview to apply. This is the only input: the "
+                         "content comes from the record, never from the caller.")
+    ap.add_argument("--now", help="Override current time (ISO 8601) for "
+                                  "deterministic runs.")
     return p
 
 
@@ -129,6 +163,10 @@ def main(argv: "list[str] | None" = None) -> int:
         from git_worklog.cli import doctor as cmd
     elif args.command == "analyze":
         from git_worklog.cli import analyze as cmd
+    elif args.command == "preview":
+        from git_worklog.cli import preview as cmd
+    elif args.command == "apply":
+        from git_worklog.cli import apply as cmd
     else:
         from git_worklog.cli import validate as cmd
 

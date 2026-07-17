@@ -16,6 +16,8 @@ directory and real files is kept, with only its worklog-directory files removed.
 
 from __future__ import annotations
 
+import hashlib
+import os
 import subprocess
 from datetime import datetime, timedelta
 
@@ -95,6 +97,38 @@ def repo_info(repo: str) -> dict:
         "has_commits": has_commits,
         "dirty_worktree": dirty,
     }
+
+
+def identity(repo: str) -> str:
+    """A stable answer to "is this still the same repository?" (roadmap §10.1).
+
+    Two facts, because either alone is forgeable by accident. The git directory's
+    real path pins *which checkout*: a clone, a second worktree, or a different
+    project at another path all differ here. The root commits pin *which
+    history*: re-``git init``-ing over the same path keeps the path and loses the
+    lineage, and a preview built against the old repository must not apply to the
+    new one just because it moved into the same folder.
+
+    An empty repository has no root commit, so its identity is its path alone.
+    That is as much as exists to know about it.
+    """
+    info = repo_info(repo)
+    roots = (_git(repo, ["rev-list", "--max-parents=0", "HEAD"]).split()
+             if info["has_commits"] else [])
+    basis = "\x00".join([os.path.realpath(info["git_dir"]), *sorted(roots)])
+    return hashlib.sha256(basis.encode("utf-8")).hexdigest()
+
+
+def submodule_fingerprint(repo: str) -> str:
+    """Hash the recursive submodule state (roadmap §10.1).
+
+    A submodule pointer moving changes what the working tree actually contains
+    without touching a single tracked file in this repository, so nothing else
+    in the fingerprint would notice. Repositories without submodules hash the
+    empty string, which is stable and costs one Git call.
+    """
+    out = _git(repo, ["submodule", "status", "--recursive"], binary=True)
+    return hashlib.sha256(out).hexdigest()
 
 
 def _parse_raw(blob: str) -> "list[dict]":

@@ -54,9 +54,8 @@ ever written. ``detect_layout()`` recognises the flat legacy shape so a
 not-yet-migrated worklog stays readable — writing to one is refused, and
 migrate_legacy_worklog.py converts it.
 
-update_daily_worklog.py, rebuild_worklog_index.py, validate_daily_worklog.py,
-validate_worklog_index.py and preview_state.py all build on this module so they
-agree on exactly one definition of the format.
+``git_worklog.writer``, the validators and the scripts over them all build on
+this module so they agree on exactly one definition of the format.
 """
 
 from __future__ import annotations

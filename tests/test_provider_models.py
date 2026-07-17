@@ -271,31 +271,6 @@ class TestEscalation(unittest.TestCase):
         finally:
             os.remove(cfg)
 
-    def test_escalation_rerun_mints_new_preview_id(self):
-        # preview_id is content-derived, so re-analysing a day with the escalation
-        # model (different worklog content) yields a different preview id — the
-        # original preview is never overwritten in place.
-        home = tempfile.mkdtemp(prefix="rw_pmhome_")
-        try:
-            def create(preview_sha):
-                payload = json.dumps({
-                    "repository": {"root": "/x", "branch": "main", "head": "abc",
-                                   "worktree_fingerprint": None},
-                    "worklog": {"index_sha256": "missing", "day_files": {},
-                                "dir_fingerprint": "d", "preview_sha256": preview_sha},
-                    "params": {"timezone": "Asia/Taipei", "include_uncommitted": False}})
-                out, _, _ = run_script("preview_state.py",
-                                       ["create", "--now", "2026-07-15T12:00:00+08:00"],
-                                       stdin=payload, env={"HOME": home})
-                return out["preview_id"]
-
-            base_id = create("a" * 64)          # base-model dry-run
-            escalated_id = create("b" * 64)     # escalation re-run, new content
-            self.assertNotEqual(base_id, escalated_id)
-        finally:
-            import shutil
-            shutil.rmtree(home, ignore_errors=True)
-
 
 class TestConfigIsSingleSource(unittest.TestCase):
     """The JSON config is the one source; its defaults meet the acceptance bar."""
