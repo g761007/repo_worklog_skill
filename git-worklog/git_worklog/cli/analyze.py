@@ -28,6 +28,7 @@ import json
 import os
 from datetime import date as date_cls, datetime, timedelta
 
+from git_worklog import dates as gwdates
 from git_worklog import language
 from git_worklog import markers as wm
 from git_worklog.analysis import (
@@ -37,14 +38,6 @@ from git_worklog.analysis import history as ah
 from git_worklog.analysis import manifest as am
 from git_worklog.analysis import results as ar
 from git_worklog.analysis import worktree as aw
-
-
-def _day_bounds(date_str: str, tz) -> "tuple[datetime, datetime]":
-    """Half-open [local 00:00, next 00:00), matching resolve_date_range.py."""
-    d = datetime.fromisoformat(date_str).date()
-    start = datetime(d.year, d.month, d.day, tzinfo=tz)
-    end = datetime.combine(d + timedelta(days=1), datetime.min.time(), tzinfo=tz)
-    return start, end
 
 
 def _date_range(start: str, end: str) -> "list[str]":
@@ -107,7 +100,7 @@ def _prepare(args) -> "tuple[dict, int]":
 
     tasks = []
     for date in dates:
-        start, end = _day_bounds(date, tz)
+        start, end = gwdates.day_window(date, tz)
         history = ah.collect(
             repo=args.repo, since=start.isoformat(), until=end.isoformat(),
             date_field=args.date_field, worklog_dir=args.worklog_dir,

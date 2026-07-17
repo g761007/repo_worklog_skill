@@ -103,11 +103,24 @@ def _parse_iso_date(value: str, field: str) -> date_cls:
                         field=field, value=value)
 
 
-def _day_bounds(d: date_cls, tz: ZoneInfo) -> dict:
+def day_window(d: "date_cls | str", tz: ZoneInfo) -> "tuple[datetime, datetime]":
+    """The half-open ``[local 00:00, next 00:00)`` window for one calendar day.
+
+    This is the day boundary the whole tool agrees on: what a day file covers,
+    what a Day Subagent is asked about, and what report mode counts commits in
+    all have to be the same window, or a commit falls through the crack between
+    two of them.
+    """
+    if isinstance(d, str):
+        d = datetime.fromisoformat(d).date()
     start = datetime(d.year, d.month, d.day, tzinfo=tz)
     # timedelta arithmetic operates on wall-clock time and keeps the tzinfo, so
     # the offset is recomputed for the next local midnight even across DST.
-    end = start + timedelta(days=1)
+    return start, start + timedelta(days=1)
+
+
+def _day_bounds(d: date_cls, tz: ZoneInfo) -> dict:
+    start, end = day_window(d, tz)
     return {
         "date": d.isoformat(),
         "start": start.isoformat(),
