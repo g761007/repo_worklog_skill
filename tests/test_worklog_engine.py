@@ -287,11 +287,11 @@ class TestUpdateDaily(unittest.TestCase):
     def test_transactional_rollback_leaves_no_partial_state(self):
         # A mid-swap failure must restore the overwritten day, drop the created
         # day, and leak no temp files (acceptance criterion: no partial writes).
-        import update_daily_worklog as u
+        from git_worklog import writer
         os.makedirs(self.dir)
         write(day_file(self.dir, "2026-07-15"),
               wm.render_new_day_file("2026-07-15", "## 當日摘要\n\nORIGINAL"))
-        writes = u._plan(self.dir, {
+        writes = writer.plan_days(self.dir, {
             "2026-07-15": {"generated_markdown": "## 當日摘要\n\nNEW"},
             "2026-07-16": {"generated_markdown": "## 當日摘要\n\nBRANDNEW"},
         }, {"timezone": "Asia/Taipei"})
@@ -308,7 +308,7 @@ class TestUpdateDaily(unittest.TestCase):
         os.replace = flaky
         try:
             with self.assertRaises(OSError):
-                u._transactional_apply(self.dir, writes)
+                writer.apply_days(self.dir, writes)
         finally:
             os.replace = real_replace
 
