@@ -31,7 +31,7 @@ from datetime import date as date_cls, datetime, timedelta
 from git_worklog import language
 from git_worklog import markers as wm
 from git_worklog.analysis import (
-    RESULTS_SUBDIR, SCHEMA_VERSION, TASKS_SUBDIR, AnalysisError,
+    PARTS_SUBDIR, RESULTS_SUBDIR, SCHEMA_VERSION, TASKS_SUBDIR, AnalysisError,
 )
 from git_worklog.analysis import history as ah
 from git_worklog.analysis import manifest as am
@@ -94,7 +94,8 @@ def _prepare(args) -> "tuple[dict, int]":
     run_dir = minted["run_dir"]
     tasks_dir = os.path.join(run_dir, TASKS_SUBDIR)
     results_dir = os.path.join(run_dir, RESULTS_SUBDIR)
-    for d in (tasks_dir, results_dir):
+    parts_dir = os.path.join(run_dir, PARTS_SUBDIR)
+    for d in (tasks_dir, results_dir, parts_dir):
         os.makedirs(d, mode=0o700, exist_ok=True)
 
     # Uncommitted work belongs to today and to no other day: a file's mtime says
@@ -118,6 +119,7 @@ def _prepare(args) -> "tuple[dict, int]":
             worktree=day_worktree, include_uncommitted=bool(day_worktree),
             provider=args.provider, model=model,
             lang=lang, run_id=minted["run_id"], result_path=result_path,
+            parts_dir=parts_dir,
         )
         manifest_path = os.path.join(tasks_dir, f"{date}.json")
         with open(manifest_path, "w", encoding="utf-8") as fh:

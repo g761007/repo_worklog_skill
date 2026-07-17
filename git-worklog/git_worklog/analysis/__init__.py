@@ -25,6 +25,11 @@ SCHEMA_VERSION = 1
 # guess at the layout the CLI wrote.
 TASKS_SUBDIR = "tasks"
 RESULTS_SUBDIR = "results"
+# Scratch space for a large day's fan-out. Deliberately *not* inside results/:
+# `collect` treats every file there as a day's answer and fails the run over any
+# it did not ask for, so a Day Subagent's per-group parts need somewhere to land
+# that is not policed. See manifest.build's `parts_dir`.
+PARTS_SUBDIR = "parts"
 
 
 class AnalysisError(ValueError):

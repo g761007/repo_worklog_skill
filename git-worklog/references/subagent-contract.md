@@ -96,6 +96,7 @@ Fields:
 | `timezone` | string | Resolved IANA timezone. |
 | `repository` | object\|null | `{root, git_dir, head, branch}` — which checkout this came from. |
 | `result_path` | string\|null | Where this day's analysis must be written (section 6a). |
+| `parts_dir` | string\|null | Where a fan-out's per-group parts go (section 10). Never a sibling of `result_path`: `results/` is read as the run's answers, so a stray file there fails the run. |
 | `analysis_rules[]` | array | The rules this analysis is held to, carried on the task itself. |
 | `required_commit_file_pairs[]` | array | `{commit, file, category, required}` — section 3a. |
 | `include_uncommitted` | bool | Whether working-tree changes are in scope (today only). |
@@ -567,6 +568,12 @@ WHAT TO DO
 5. Group commits by REAL work theme, not one-per-commit. If large_day is true,
    you MAY fan out into Code Analysis Subagents grouped by work area (see the
    large-day template) — never one-commit-one-subagent.
+   IF YOU FAN OUT, each Code Analysis Subagent writes to
+   [the manifest's parts_dir]/[date].[group-slug].json — NOT to a path derived
+   from your own output path. Your output path is inside a results directory
+   that is read as the run's answers: any extra file there fails the entire run
+   (`unknown`). Reconcile the parts yourself and write only your own result to
+   your output path.
 6. Determine the END-OF-DAY final state — the repository as it stood at this
    day's LAST commit. If a change was introduced and then reverted the same day,
    report the net result, not each intermediate step as if it were live.
@@ -614,6 +621,12 @@ OUTPUT
   actually called `parse_legacy`, or `preview_dir` for `previews_dir`, reads
   perfectly and is a fabrication (#15). Read the name, then cite it. A file that
   exists in the checkout may not have existed at the commit you are citing.
+- A DELETION CANNOT BE CITED. The file is gone from the tree of the commit that
+  deleted it, so {"commit": <the deleting commit>, "file": <the deleted file>}
+  can never resolve. To evidence what the file was, cite it at a commit where it
+  still existed; to say that it was deleted, write that in prose and keep the
+  path in the work item's files[] — coverage accepts that, and deletions are
+  excused from coverage anyway (§5b).
 - tests[] says what the tests COVER, not how many exist. Name the file and the
   behaviour it pins:
     "tests/test_git_collection.py — merge 偵測、revert 候選、rename/copy、空 repo"
@@ -659,7 +672,8 @@ INPUTS
 - timezone:        [IANA tz]
 - repository root: [absolute path]
 - provider / model:[same as the parent Day Subagent]
-- output path:     [<run_dir>/<date>.<group-slug>.json — given by the parent]
+- output path:     [<parts_dir>/<date>.<group-slug>.json — given by the parent,
+                    from the manifest's parts_dir. NOT next to the day's result.]
 - file group (from the manifest's file_groups[]):
     group:    [e.g. backend:src/api]
     category: [feature|backend|frontend|mobile|api|database|tests|configuration|deployment|documentation]
@@ -702,11 +716,19 @@ OUTPUT
 ```
 
 A Day Subagent that fans out gives each Code Analysis Subagent a distinct path
-under the same `run_dir`, named `<date>.<group-slug>.json`, then reads them back
-and reconciles them into its own `<date>.json`. Those group files sit beside the
-day's result without colliding — `analyze collect` looks only for
-`<date>.json`. A group file that is missing or unparseable makes the **day**
-`partial` (§11); the Day Subagent must not quietly drop that group's work area.
+**under the manifest's `parts_dir`**, named `<date>.<group-slug>.json`, then
+reads them back and reconciles them into its own `result_path`.
+
+**Never put a group file next to the day's result.** `parts_dir` is a separate
+directory precisely because `results/` is not scratch space: `analyze collect`
+reads every file there as some day's answer and fails the whole run over any it
+did not ask for (`unknown`). Deriving a sibling of `result_path` puts the parts
+in exactly that directory — which is what a real large-day run did, blocking the
+day the fan-out existed to make tractable. Use `parts_dir` from the manifest; do
+not construct a path from `result_path`.
+
+A group file that is missing or unparseable makes the **day** `partial` (§11);
+the Day Subagent must not quietly drop that group's work area.
 
 ---
 

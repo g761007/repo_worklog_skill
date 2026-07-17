@@ -142,6 +142,31 @@ class TestPrepare(_Run):
             self.assertFalse(os.path.exists(t["result_path"]),
                              "prepare must not invent a result")
 
+    def test_a_fan_out_has_somewhere_to_write_that_is_not_results(self):
+        # A large day's Code Analysis Subagents need scratch space, and the only
+        # path a Day Subagent can otherwise derive is a sibling of its own
+        # result_path -- i.e. inside results/, where every extra file is an
+        # `unknown` that fails the run. A real large-day run did exactly that and
+        # blocked itself. So prepare hands the manifest a parts_dir, and it must
+        # exist and must not be results/.
+        d, _, err = self.prepare()
+        self.assertTrue(d["ok"], err)
+        with open(d["tasks"][0]["manifest_path"], encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        parts = manifest["parts_dir"]
+        self.assertTrue(os.path.isdir(parts), "prepare did not create parts_dir")
+        self.assertNotEqual(os.path.dirname(d["tasks"][0]["result_path"]), parts)
+
+        # And a part written there is invisible to collect, which is the point.
+        with open(os.path.join(parts, f"{_DATE}.backend-src.json"), "w") as fh:
+            json.dump({"group": "backend:src", "notes": "a fan-out part"}, fh)
+        self.write_result(d["run_id"], _DATE, _result(_DATE))
+        c, rc, err = self.collect(d["run_id"])
+        self.assertTrue(c["ok"], err)
+        self.assertEqual(c["unknown"], [])
+        self.assertFalse(c["partial_run"], "a fan-out part blocked the run")
+        self.assertEqual(rc, 0)
+
     def test_manifest_carries_the_roadmap_fields(self):
         d, _, err = self.prepare()
         self.assertTrue(d["ok"], err)

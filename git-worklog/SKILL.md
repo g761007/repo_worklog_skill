@@ -264,10 +264,18 @@ model table below). `model` is an object — `{display_name, model_id}` plus
 
 Each manifest gives `file_groups` (grouped by real work area),
 `required_context`, `analysis_rules`, a `large_day` flag recommending Code
-Analysis Subagents when the day is big, `required_commit_file_pairs` (§5b), and
-the day's authorship — `authors[]` (distinct names, first-appearance order) plus
-`commits[].author_name`. You render the `參與者` line and each `相關 commits`
-entry's author from these directly; the subagent never returns attribution.
+Analysis Subagents when the day is big, `parts_dir` (where a fan-out's parts go
+— never beside the day's result, see below), `required_commit_file_pairs` (§5b),
+and the day's authorship — `authors[]` (distinct names, first-appearance order)
+plus `commits[].author_name`. You render the `參與者` line and each
+`相關 commits` entry's author from these directly; the subagent never returns
+attribution.
+
+A large day's fan-out writes its per-group parts to `parts_dir`, **not** beside
+the day's `result_path`. `results/` holds the run's answers and `collect` fails
+the run over any file there it did not ask for (`unknown`) — so a fan-out that
+derives a sibling of `result_path` blocks the very day it was meant to make
+tractable.
 
 Patches are **not** in the manifest — subagents read them with `git show`.
 

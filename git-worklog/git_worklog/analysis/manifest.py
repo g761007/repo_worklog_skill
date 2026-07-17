@@ -351,12 +351,14 @@ def build(date: str, timezone: str, history: "dict | None" = None,
           provider: str = "anthropic", model: "dict | None" = None,
           lang: "language.Resolution | None" = None,
           run_id: "str | None" = None,
-          result_path: "str | None" = None) -> dict:
+          result_path: "str | None" = None,
+          parts_dir: "str | None" = None) -> dict:
     """Assemble one day's manifest from that day's collected Git facts.
 
-    ``run_id`` and ``result_path`` are known only to a caller that minted a run
-    (``analyze prepare``), so they are optional: a manifest built ad hoc for one
-    day is still a valid manifest, it just does not belong to a run yet.
+    ``run_id``, ``result_path`` and ``parts_dir`` are known only to a caller
+    that minted a run (``analyze prepare``), so they are optional: a manifest
+    built ad hoc for one day is still a valid manifest, it just does not belong
+    to a run yet.
     """
     if history and not history.get("ok", True):
         raise AnalysisError("BAD_HISTORY_INPUT",
@@ -416,4 +418,11 @@ def build(date: str, timezone: str, history: "dict | None" = None,
         "large_day": is_large,
         "recommended_code_analysis_subagents": len(groups) if is_large else 0,
         "result_path": result_path,
+        # Where a fan-out's per-group parts go. It is on the manifest because a
+        # Day Subagent is handed a manifest and a result_path and nothing else:
+        # left to derive a sibling path from result_path, it lands in results/,
+        # where every extra file is an `unknown` that fails the whole run. The
+        # day the contract most wants split up is exactly the day that then
+        # cannot be written -- observed on the first real large-day run.
+        "parts_dir": parts_dir,
     }
