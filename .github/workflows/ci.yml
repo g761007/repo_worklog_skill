@@ -95,3 +95,38 @@ jobs:
           assert r['model']['model_id'], 'installed config resolved no model id'
           print('resolved', r['model']['model_id'], 'from', r['model_id_source'])
           "
+
+  skill-zip:
+    # The other job proves `pip install` works. This proves the other way in --
+    # unzip and use, with nothing installed -- which is how the skill is actually
+    # distributed, and the property the whole layout is arranged to protect.
+    # A broken zip is invisible until a release, so build it on every PR.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Build the archive
+        run: python tools/build_skill_zip.py
+
+      - name: The unzipped skill runs with nothing installed
+        run: |
+          dest="$(mktemp -d)"
+          unzip -q skill.zip -d "$dest"
+          # The directory name IS the command name in Claude Code, so this is a
+          # contract, not cosmetics.
+          test -d "$dest/git-worklog" || { echo "did not unzip to git-worklog/"; exit 1; }
+          cd "$dest/git-worklog"
+          # No PYTHONPATH, no pip install: exactly what a user gets.
+          python -m git_worklog version
+          python -m git_worklog --help > /dev/null
+          python -c "
+          import sys; sys.path.insert(0, '.')
+          from git_worklog import providers
+          r = providers.resolve(host='anthropic')
+          assert r['model']['model_id'], 'packaged config resolved no model id'
+          print('resolved', r['model']['model_id'], 'from the unzipped skill')
+          "

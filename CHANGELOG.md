@@ -8,6 +8,31 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The skill calls the CLI, and only the CLI** (#7). Every `scripts/<name>.py`
+  invocation is gone from `SKILL.md` and `references/`. Three steps became one:
+  `analyze prepare` now takes what the user actually said (`7d`, `--days 7`,
+  `--date`, `--from`/`--to`) plus `--host anthropic`, resolves the range, the
+  timezone and the model itself, and reports each of them back so nothing is
+  hidden — a run that silently picked seven days is a run nobody can check before
+  it writes.
+
+  New commands: **`coverage`** and **`refs`** (report mode's two questions),
+  **`migrate`** (roadmap §2.4), and **`reindex`** — the documented repair for
+  `INDEX_WRITE_FAILED`, which previously existed only as a script the skill was
+  no longer allowed to call. `scripts/` stays as a compatibility surface for
+  anyone who scripted against it.
+
+- **`tools/build_skill_zip.py`** (#7, Appendix A8). Packaging was manual, which
+  is how the last release shipped an archive staged under the old `repo_worklog/`
+  name, containing a `preview_state.py` deleted a version earlier and a `config/`
+  directory that had moved.
+
+  What ships is `git ls-files git-worklog/` — `.gitignore` is already the one
+  place that says what is build litter, and a second list would only drift from
+  it. CI now builds the archive on every PR, unzips it, and runs the CLI out of
+  it with nothing installed: that zero-install path is the one users actually
+  take, and a broken archive is otherwise invisible until release day.
+
 - **`git-worklog preview` / `git-worklog apply`** (#6) — a preview is now the
   artifact, not a receipt for one.
 
@@ -241,6 +266,29 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the other exists for.
 
 ### Changed
+
+- **`provider_models.json` ships inside the package** (#7), at
+  `git_worklog/data/`. Only `git_worklog*` is packaged, so from a sibling
+  `config/` directory an installed CLI could import the resolver and then find
+  nothing to resolve — calling a file the single source of truth while one of the
+  two front ends cannot read it was the part that did not hold. **Breaking** for
+  anything reading `git-worklog/config/provider_models.json` by path.
+
+- **`analyze prepare` answers `FROM_AFTER_TO` for a reversed range**, not
+  `BAD_RANGE` (#7). `BAD_RANGE` appeared in no reference; it existed only because
+  prepare carried its own copy of the date rule, and
+  `date-parameter-contract.md`'s error table has always called this
+  `FROM_AFTER_TO`. One module decides it now, so the same mistake gets the same
+  answer whichever front end you reached for.
+
+- **The 30-day cap reaches `analyze prepare`**, including `--from`/`--to`, which
+  previously slipped past it (#7). The cap exists to bound per-day subagent cost
+  and prepare is the command that spends it. `coverage` carries report mode's
+  90-day cap instead: it reads day files already on disk and spawns nothing, so
+  the cost the tighter cap protects is not at stake.
+
+- **`coverage` reports `timezone` as `{resolved, source}`** (#7), rather than
+  echoing an argument that may not have been given.
 
 - **The last script-local engines moved into the package** (#7). Date resolution,
   ref-range resolution, provider/model resolution, coverage and legacy migration

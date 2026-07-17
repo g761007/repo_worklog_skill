@@ -61,6 +61,9 @@ git-worklog/                  # the skill (this whole directory is the skill)
     ├── worklog-format.md
     └── provider-models.md
 
+tools/
+└── build_skill_zip.py        # build/verify skill.zip; ships what git tracks
+
 docs/
 ├── naming-conventions.md     # canonical names: brand, skill, CLI, package, directories
 └── plans/                    # design plans, newest last (yyyy-MM-dd-<topic>.md)
@@ -272,20 +275,38 @@ the old file, and refuses if the legacy markers are corrupt.
 
 ### Development commands
 
-Each script is standalone and prints one JSON object to stdout:
+Every command prints one JSON object to stdout; `--text` renders it for humans.
+No install needed — run them from the skill directory:
 
 ```bash
 cd git-worklog
-python3 scripts/resolve_date_range.py --days 7 --timezone Asia/Taipei --today 2026-07-15
-python3 scripts/collect_git_history.py --repo /path/to/repo --info-only
-python3 scripts/update_daily_worklog.py --dir /tmp/.git-worklog <<'JSON'
-{"meta": {"timezone": "Asia/Taipei", "branch": "main", "head": "abc1234"},
- "entries": {"2026-07-15": {"generated_markdown": "## 當日摘要\n\n..."}}}
-JSON
-python3 scripts/rebuild_worklog_index.py --dir /tmp/.git-worklog
-python3 scripts/validate_daily_worklog.py --dir /tmp/.git-worklog
-python3 scripts/validate_worklog_index.py --dir /tmp/.git-worklog
+python3 -m git_worklog version
+python3 -m git_worklog --text doctor
+python3 -m git_worklog --text validate --dir /tmp/.git-worklog
+python3 -m git_worklog --text coverage 7d --repo /path/to/repo --timezone Asia/Taipei
+python3 -m git_worklog --text refs --repo /path/to/repo --list-tags
+python3 -m git_worklog --text reindex --dir /tmp/.git-worklog
 ```
+
+`scripts/` holds thin shells over the same engine, kept for anyone who scripted
+against them. They are not the skill's path and not where new work goes.
+
+### Building the release archive
+
+```bash
+python3 tools/build_skill_zip.py            # writes ./skill.zip
+python3 tools/build_skill_zip.py --check    # verify an existing one
+```
+
+What ships is whatever `git ls-files git-worklog/` reports, so `.gitignore` is
+the only place that decides what counts as build litter — there is no second
+exclusion list to drift from it. The consequence: the archive contains what is
+**committed**, and uncommitted edits do not ship.
+
+It stages the skill under `git-worklog/`, so the directory a user unzips is the
+name Claude Code triggers on. CI builds it on every PR, unzips it, and runs the
+CLI out of it with nothing installed, because a broken archive is otherwise
+invisible until release day.
 
 ### Tests
 
@@ -583,6 +604,38 @@ skill 會明講並詢問是否先補齊——**絕不默默降級成摘要 commi
   已套用，一律拒絕，而不是自行調和。
 - 同一份工作日誌的並行 apply 會被鎖擋下；只有在持有者確定已死時才會破鎖。
 - Skill 絕不執行 `git add/commit/push/fetch/pull/checkout/switch/merge/rebase`。
+
+### 開發指令
+
+每個指令都輸出單一 JSON 物件；`--text` 則渲染成人類可讀格式。不需安裝，直接在
+skill 目錄下執行：
+
+```bash
+cd git-worklog
+python3 -m git_worklog version
+python3 -m git_worklog --text doctor
+python3 -m git_worklog --text validate --dir /tmp/.git-worklog
+python3 -m git_worklog --text coverage 7d --repo /path/to/repo --timezone Asia/Taipei
+python3 -m git_worklog --text refs --repo /path/to/repo --list-tags
+```
+
+`scripts/` 是同一套引擎的命令列薄殼，保留給曾經接過它們的腳本；那不是 skill 的
+路徑，新功能也不寫在那裡。
+
+### 打包發布用的封存檔
+
+```bash
+python3 tools/build_skill_zip.py            # 產生 ./skill.zip
+python3 tools/build_skill_zip.py --check    # 驗證既有的封存檔
+```
+
+出貨內容完全由 `git ls-files git-worklog/` 決定，因此 `.gitignore` 是唯一定義
+「什麼算建置垃圾」的地方——沒有第二份排除清單可以跟它漂移。代價是：封存檔裝的是
+**已提交**的內容，未提交的修改不會進去。
+
+它會把 skill 打包在 `git-worklog/` 之下，讓使用者解壓後的目錄名等於 Claude Code
+的觸發名。CI 每個 PR 都會建置、解壓，並在完全未安裝的情況下跑一次 CLI——否則壞掉的
+封存檔要到發布當天才會被發現。
 
 ### 測試
 
