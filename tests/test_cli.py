@@ -15,24 +15,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from helpers import ROOT, make_history_repo, rmtree, wm
-
-SKILL_ROOT = os.path.join(ROOT, "git-worklog")
-
-
-def run_cli(*args: str, env: "dict | None" = None):
-    """Invoke the CLI as a subprocess. Returns (parsed_json_or_None, rc, stderr)."""
-    full_env = os.environ.copy()
-    full_env["PYTHONPATH"] = SKILL_ROOT
-    if env:
-        full_env.update(env)
-    p = subprocess.run([sys.executable, "-m", "git_worklog", *args],
-                       capture_output=True, text=True, env=full_env)
-    try:
-        parsed = json.loads(p.stdout)
-    except json.JSONDecodeError:
-        parsed = None
-    return parsed, p.returncode, p.stderr
+from helpers import ROOT, SKILL_ROOT, make_history_repo, rmtree, run_cli, wm
 
 
 def write(path: str, text: str) -> None:

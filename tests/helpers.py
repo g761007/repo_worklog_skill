@@ -16,7 +16,8 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRIPTS = os.path.join(ROOT, "git-worklog", "scripts")
+SKILL_ROOT = os.path.join(ROOT, "git-worklog")
+SCRIPTS = os.path.join(SKILL_ROOT, "scripts")
 
 sys.path.insert(0, SCRIPTS)
 import worklog_markers as wm  # noqa: E402
@@ -48,6 +49,27 @@ def run_script(name: str, args: list[str], stdin: str | None = None,
     except json.JSONDecodeError:
         parsed = None
     return parsed, proc.returncode, proc.stderr
+
+
+def run_cli(*args: str, env: "dict | None" = None):
+    """Invoke the CLI as a subprocess. Returns (parsed_json_or_None, rc, stderr).
+
+    Driven as `python3 -m git_worklog`, the way the skill and a user actually
+    invoke it — so tests cover argument parsing, the JSON contract and exit
+    codes, not just the functions underneath.
+    """
+    full_env = os.environ.copy()
+    full_env["PYTHONPATH"] = SKILL_ROOT
+    full_env.setdefault("GIT_TERMINAL_PROMPT", "0")
+    if env:
+        full_env.update(env)
+    p = subprocess.run([sys.executable, "-m", "git_worklog", *args],
+                       capture_output=True, text=True, env=full_env)
+    try:
+        parsed = json.loads(p.stdout)
+    except json.JSONDecodeError:
+        parsed = None
+    return parsed, p.returncode, p.stderr
 
 
 def _git(repo: str, *args: str, env: dict | None = None) -> None:

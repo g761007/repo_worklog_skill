@@ -22,6 +22,19 @@ from git_worklog.analysis import SCHEMA_VERSION, AnalysisError  # noqa: F401
 # Subagent is advised to fan out into Code Analysis Subagents.
 LARGE_DAY_FILE_THRESHOLD = 25
 
+# Carried on every manifest (roadmap §8) so the contract travels with the task
+# rather than living only in prose the subagent may never have been shown. The
+# skill states all of this at length; a manifest is what actually reaches the
+# model, and a rule that is not in the manifest is a rule that is not enforced.
+ANALYSIS_RULES = [
+    "Read the actual patch.",
+    "Read historical source code from the target commit.",
+    "Do not rely only on commit messages.",
+    "Describe the final state after all commits on the same day.",
+    "Write all user-facing analysis using the resolved language.",
+    "Preserve code symbols, file paths, commit hashes, and identifiers.",
+]
+
 # Category priority mirrors references/code-analysis-rules.md (plan section 9.4).
 # Earlier entries win when a path matches more than one rule.
 _CATEGORY_ORDER = [
@@ -207,11 +220,31 @@ def resolve_language(explicit: "str | None", source: "str | None",
     )
 
 
+def _repository_block(history: "dict | None") -> "dict | None":
+    """The §8 repository block, taken from the history payload's own metadata."""
+    info = (history or {}).get("repository")
+    if not isinstance(info, dict):
+        return None
+    return {
+        "root": info.get("root"),
+        "git_dir": info.get("git_dir"),
+        "head": info.get("head"),
+        "branch": info.get("branch"),
+    }
+
+
 def build(date: str, timezone: str, history: "dict | None" = None,
           worktree: "dict | None" = None, include_uncommitted: bool = False,
           provider: str = "anthropic", model: "dict | None" = None,
-          lang: "language.Resolution | None" = None) -> dict:
-    """Assemble one day's manifest from that day's collected Git facts."""
+          lang: "language.Resolution | None" = None,
+          run_id: "str | None" = None,
+          result_path: "str | None" = None) -> dict:
+    """Assemble one day's manifest from that day's collected Git facts.
+
+    ``run_id`` and ``result_path`` are known only to a caller that minted a run
+    (``analyze prepare``), so they are optional: a manifest built ad hoc for one
+    day is still a valid manifest, it just does not belong to a run yet.
+    """
     if history and not history.get("ok", True):
         raise AnalysisError("BAD_HISTORY_INPUT",
                             "collect_git_history reported an error.",
@@ -236,8 +269,11 @@ def build(date: str, timezone: str, history: "dict | None" = None,
 
     return {
         "ok": True,
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
         "date": date,
         "timezone": timezone,
+        "repository": _repository_block(history),
         "language": lang.as_manifest() if lang else None,
         "warnings": lang.warnings if lang else [],
         "include_uncommitted": bool(include_uncommitted),
@@ -261,7 +297,9 @@ def build(date: str, timezone: str, history: "dict | None" = None,
         } for f in files],
         "file_groups": groups,
         "required_context": _required_context(groups),
+        "analysis_rules": list(ANALYSIS_RULES),
         "uncommitted_changes": uncommitted,
         "large_day": is_large,
         "recommended_code_analysis_subagents": len(groups) if is_large else 0,
+        "result_path": result_path,
     }

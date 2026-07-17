@@ -84,6 +84,10 @@ def repo_info(repo: str) -> dict:
     dirty = bool(_git(repo, ["status", "--porcelain"]).strip())
     return {
         "root": root,
+        # A manifest records this so a reader can tell which checkout an
+        # analysis came from -- a worktree's git_dir is not root/.git, and that
+        # is exactly when "which repo was this?" stops being obvious (§8).
+        "git_dir": _git(repo, ["rev-parse", "--absolute-git-dir"]).strip(),
         "branch": branch,
         "detached_head": detached,
         "head": head,
@@ -91,19 +95,6 @@ def repo_info(repo: str) -> dict:
         "has_commits": has_commits,
         "dirty_worktree": dirty,
     }
-
-
-def git_dir(repo: str) -> "str | None":
-    """Absolute path of the repository's ``.git`` directory (roadmap §8).
-
-    Best-effort: a manifest records it so a reader can tell which checkout the
-    analysis came from, and a repository that will not answer is not worth
-    failing the run over.
-    """
-    try:
-        return _git(repo, ["rev-parse", "--absolute-git-dir"]).strip()
-    except GitError:
-        return None
 
 
 def _parse_raw(blob: str) -> "list[dict]":
