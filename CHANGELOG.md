@@ -523,6 +523,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `apply_days`'s multi-file rollback transaction stays separate — a different
   algorithm, not this one looped. Behaviour-preserving: no test changed.
 
+- **SKILL.md slimmed; a new `references/analysis-pipeline.md`** (docs). §3 carried
+  171 lines of field-by-field `prepare`/`collect` detail — output keys, the
+  manifest catalogue, error codes, check mechanics, and a model table duplicated
+  from `provider-models.md`. That detail moved to a new reference; §3 keeps only
+  the rules the orchestrator must act on inline (pass what the user said, halt on
+  an unavailable model, the `LARGE_DAY` stop-and-ask, coverage, the spawn-and-DONE
+  contract, "a failed day is not an empty one"), each ending in a pointer. No
+  action rule moved — only reference detail. SKILL.md: 551 → 467 lines.
+
 ## [0.4.0] - 2026-07-16
 
 ### Added

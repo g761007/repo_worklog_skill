@@ -205,6 +205,10 @@ analysed and **in which language**; `analyze collect` decides whether to
 understanding the code, writing the prose — is yours and the subagents'. The CLI
 never does it and needs no model API key.
 
+The field-by-field detail of what these commands emit — every output key, the
+manifest contents, the error codes, the check mechanics — is in
+`references/analysis-pipeline.md`. What must reach you *inline* is here.
+
 **3a. Prepare the run** (deterministic, once for the whole range):
 
 ```
@@ -214,97 +218,50 @@ python3 -m git_worklog analyze prepare <range> --repo <root> \
     [--timezone <IANA>] [--include-uncommitted]
 ```
 
-`<range>` is whatever the user asked for, in canonical form: a shortcut like
-`7d`, or `--date 2026-07-01`, `--days 7`, or `--from 2026-07-01 --to
-2026-07-10`. Do **not** resolve the dates yourself — pass what they said and let
-prepare answer. Do not compute a model either: `--host` is the host you are
-running under (Claude Code → `anthropic`, Codex → `openai`, Gemini → `google`),
-and prepare resolves that host's model from the packaged config. Never guess the
-host; if you cannot tell, ask.
+- **`<range>` is what the user said, verbatim** — a shortcut like `7d`, or
+  `--date` / `--days` / `--from`+`--to`. Do **not** resolve the dates yourself;
+  prepare answers, and its `range` block is what you show in the dry-run.
+- **Do not compute a model.** `--host` is the host you run under (Claude Code →
+  `anthropic`, Codex → `openai`, Gemini → `google`); prepare resolves the model
+  from the packaged config. Never guess the host; if you cannot tell, ask. If the
+  model is unavailable it returns `MODEL_UNAVAILABLE` — **halt and ask**, never
+  silently pick another. Details: `references/provider-models.md`.
+- **`--language` / `--language-source` come from §2a**, resolved once and stamped
+  on every manifest — a day whose result disagrees blocks the whole run.
+- Keep `run_id`, `run_dir`, and every `tasks[]` entry (each carries a
+  `manifest_path` and a `result_path`).
+- On `ok:false`, report the error and stop (code table:
+  `references/analysis-pipeline.md` §3).
 
-Returns `run_id`, `run_dir`, and `tasks[]` — one entry per calendar day, each
-with a `manifest_path` (what to analyse) and a `result_path` (where its analysis
-must be written). Keep all of it.
+**A `LARGE_DAY` warning means stop and ask before dispatching that day.** It
+carries the commit, file and group counts and the resolved model, because one
+subagent on the cheap model may not hold a big day. Offer to fan it out into the
+recommended Code Analysis Subagents, to escalate the model (`--host … --escalate`,
+redo `prepare`), or to proceed as-is — the same surface-and-ask you use for a gap
+or an over-30-day range. Do not decide silently: a large day that ran anyway on
+the cheap model is exactly the run that came back confidently wrong and nothing
+noticed. The counts are there so a 60-file day and a 26-file one are not the same
+question; proceeding is a legitimate answer, an unasked question is not.
 
-It also tells you what it decided, which is what you show the user in the dry-run
-summary:
-
-- `range` — `{mode, from, to, days_count, today}`. The days it actually picked.
-  If the user said `7d`, this is which seven.
-- `timezone` — `{resolved, source}`. If `source` is `system-offset` (no IANA
-  name), tell the user which offset is assumed and offer to set one.
-- `repository` — `root`, `branch` (null if `detached_head`), `head`/`short_head`,
-  `has_commits`, `dirty_worktree`.
-- `provider` and `model` — what every subagent for this run will use.
-- `warnings[]` — surface these; do not swallow them. `DEPRECATED_ENV_VAR` means
-  an old variable name chose the model, and the user should know which knob did
-  it. `UNCOMMITTED_NOT_IN_RANGE` means their uncommitted work had nowhere to go.
-  `LARGE_DAY` means a day is big enough that one subagent on the resolved model
-  may not hold it — the warning carries the commit, file and group counts and the
-  model. **Before dispatching that day, stop and ask**, the same way you do for a
-  gap or an over-30-day range: offer to fan it out into the recommended Code
-  Analysis Subagents (below), to escalate the model (`--host … --escalate`, redo
-  `prepare`), or to proceed as-is. Do not decide silently — a large day that ran
-  anyway on the cheap model is exactly the run that came back confidently wrong
-  and nothing noticed. The counts are there so a 60-file day and a 26-file one
-  are not the same question; proceeding is a legitimate answer, an unasked
-  question is not.
-
-On `ok:false`, report the error and stop. Common codes: `TOO_MANY_DAYS` (show
-`requested_days`, ask to narrow), `NO_DATE_SPEC`, `ARG_CONFLICT`,
-`DAYS_OUT_OF_RANGE`, `INVALID_DATE`, `FROM_AFTER_TO`, `TO_WITHOUT_FROM`,
-`INVALID_TIMEZONE`, `UNKNOWN_HOST`, `MODEL_UNAVAILABLE` (halt and ask — never
-silently pick another model), `NOT_A_GIT_REPO` (tell the user this directory is
-not a Git repository and stop).
-
-Empty repo (`has_commits:false`): with no `--include-uncommitted` there is
-nothing to log — say so. With it, only the working tree is analysed.
-
-Timezone priority and the half-open `[00:00, next 00:00)` day rule:
-`references/date-parameter-contract.md`.
-
-`--language` and `--language-source` come from §2a. They are resolved **once**
-here and stamped on every manifest in the run: a manifest's `language.resolved`
-is what each day's result is checked against, and days that disagree block the
-whole run.
-
-Each manifest gives `file_groups` (grouped by real work area),
-`required_context`, `analysis_rules`, a `large_day` flag recommending Code
-Analysis Subagents when the day is big, `parts_dir` (where a fan-out's parts go
-— never beside the day's result, see below), `required_commit_file_pairs` (§3b),
-and the day's authorship — `authors[]` (distinct names, first-appearance order)
-plus `commits[].author_name`. You render the `參與者` line and each
-`相關 commits` entry's author from these directly; the subagent never returns
-attribution.
-
-A large day's fan-out writes its per-group parts to `parts_dir`, **not** beside
-the day's `result_path`. `results/` holds the run's answers and `collect` fails
-the run over any file there it did not ask for (`unknown`) — so a fan-out that
-derives a sibling of `result_path` blocks the very day it was meant to make
-tractable.
-
-Patches are **not** in the manifest — subagents read them with `git show`.
-
-**3b. What each day is held to.** Every manifest lists
-`required_commit_file_pairs`: each (commit, file) the day touched, flagged
-`required` or not. **Required means the day's analysis must account for that
-file** — naming it in a work item's `files[]` is enough; an `evidence[]` citation
-is stronger but not demanded. Only source files are required; docs, config, CI,
-tests, binaries and deleted files are listed but excused (a deleted file is gone
-from that commit's tree, so it *cannot* be cited).
-
-A required file the analysis never mentions fails the day at §3d. This is not
-pedantry: a file that was changed but never described may never have been read,
-and that is invisible in a result that otherwise looks confident.
+**3b. Coverage.** Each manifest's `required_commit_file_pairs` marks the source
+files the day's analysis **must account for** — naming one in a work item's
+`files[]` is enough. A required file the result never mentions fails the day at
+collect: a file changed but never described may never have been read, and that is
+invisible in a result that otherwise looks confident. Which files are required,
+and why deletions and non-source files are excused:
+`references/analysis-pipeline.md` §5.
 
 **3c. Spawn one Day Subagent** per day, passing its `manifest_path` **and its
-`result_path`**. The subagent must read the real diffs and enough code context,
-determine the **end-of-day state** (a feature added then reverted the same day is
-*not* a live change), and **write** the structured JSON in
+`result_path`**. The subagent reads the real diffs and enough code context,
+determines the **end-of-day state** (a feature added then reverted the same day
+is *not* a live change), and **writes** the structured JSON from
 `references/subagent-contract.md` to that path, replying only `DONE` — results
-are never passed back as reply text, which drops and truncates them
-(`references/subagent-contract.md` §6a). It must not write to the worklog. Days
-with no commits still write `has_changes:false`.
+are never passed back as reply text, which drops and truncates them (§6a). It
+must not write to the worklog. Days with no commits still write
+`has_changes:false`. A large day may fan out into Code Analysis Subagents grouped
+by work area, each writing to the manifest's `parts_dir` — never beside
+`result_path`, where `collect` would fail the run over it
+(`references/subagent-contract.md`).
 
 **3d. Collect every day's result** (deterministic), once all subagents finish:
 
@@ -312,58 +269,21 @@ with no commits still write `has_changes:false`.
 python3 -m git_worklog analyze collect --run-id <run_id> --repo <root>
 ```
 
-Nothing here names a date or a language: `collect` reads the run's own
-manifests, so a day cannot be dropped from the check by being left off a command
-line. It reports:
+It reads the run's own manifests, so no day can be dropped by being left off a
+command line. Every result is checked three ways — **language**, **evidence and
+prose symbols against the day's tree**, and **required-file coverage** — and each
+failure fails the day. `partial_run:true` (any `missing`, `invalid`, `degraded`
+or `unknown` date) blocks apply and exits `1`.
 
-- `complete` / `degraded` / `missing` / `invalid` / `unknown` / `failed_dates`,
-  `results` (date → object), `partial_run`, `escalation_suggested_dates`.
-- **A date in `missing` or `invalid` is a failed day, not an empty one** — never
-  treat it as "nothing happened" and never fall back to its commit messages.
-- `unknown` is a result file the run never asked for. Do not merge it.
-- `partial_run:true` blocks apply by default (§7). Exit code is `1`.
+A failed or missing day is **not** an empty one: never treat it as "nothing
+happened", never fall back to commit messages. Fix a failure by **re-running that
+day's subagent** against the same manifest, then collecting again — never
+hand-edit a result, never paper over a gap. Output fields and the check
+mechanics: `references/analysis-pipeline.md` §6.
 
-Three things every result is checked against, and each fails the day:
-
-- **Language** — the tag must be the one its manifest asked for.
-- **Evidence accuracy** — every entry is checked against the tree of the commit
-  it cites: the commit exists, the file existed *at that commit*, the `symbol`
-  appears in it, the `lines` range is inside it. A subagent that cites
-  `migrate_directory` for a function called `parse_legacy` has told you nothing
-  you can follow (#15). On a shallow clone unreachable commits report
-  `EVIDENCE_UNVERIFIABLE` rather than failing the day — that is the runner's
-  clone depth, not the subagent's fault.
-- **Coverage** — every required file (§3b) is mentioned somewhere.
-  `COVERAGE_INCOMPLETE` names exactly which were not.
-
-If a day fails, fix the analysis — re-run that day's subagent against the same
-manifest and let it write its `result_path` again, then collect once more. Do
-**not** work around a failure by editing the result file by hand, and never
-paper over a gap with commit messages.
-
-For large days, the Day Subagent may fan out into Code Analysis Subagents grouped
-by feature/module (see `references/subagent-contract.md`).
-
-Model per host — you pass `analyze prepare --host <key>` for the host you are
-running under, and it resolves the rest (cost-first defaults; single source is
-`git_worklog/data/provider_models.json`). Read `model` back off its output:
-
-| Host        | provider key | default display | default model_id      |
-|-------------|--------------|-----------------|-----------------------|
-| Claude Code | `anthropic`  | Claude Haiku 4.5 | `claude-haiku-4-5`   |
-| Codex       | `openai`     | GPT-5.6 Luna (effort `low`) | `gpt-5.6-luna` |
-| Gemini      | `google`     | Gemini 3.5 Flash | `gemini-3.5-flash`   |
-
-Pick the host you actually run under — never guess the provider from a model
-name, and never pass all three at once. If the host cannot be determined, stop
-and report a configuration error (`UNKNOWN_HOST`). Overrides: an explicit
-`--model` beats `GIT_WORKLOG_<PROVIDER>_MODEL`, which beats the config default.
-
-If the chosen model is unavailable: **stop**, report the provider and requested
-`model_id`, list candidates, and let the user decide. Never silently fall back to
-a pricier model, never auto-switch to the escalation model, never degrade to
-reading only commit messages. Escalation is opt-in and requires explicit user
-approval (a new dry-run + new `preview_id`). Details:
+Model per host is resolved by `--host` (cost-first defaults, single source
+`git_worklog/data/provider_models.json`); read `model` back off prepare's output.
+Overrides, the per-host table, unavailable-model handling and opt-in escalation:
 `references/provider-models.md`.
 
 ---
@@ -429,20 +349,15 @@ Previews expire after 24h (`--ttl-seconds` to change it). `git-worklog preview
 --show <id> --check` reports a stored preview's state; `--cancel <id>` retires
 one the user decided against.
 
-4. Show the user the dry-run summary described in
-   `references/interaction-flow.md`: repository root, branch, HEAD, timezone,
-   requested mode, resolved range, `include_uncommitted`, the **output
-   language** (and, when it came from `fallback`, say so — the user may want to
-   correct it before anything is written), the **subagent configuration** (provider, model, reasoning effort, automatic escalation:
-   disabled), per-day commit counts and status, files analyzed, per-date planned
-   action (create / overwrite / no-change), the index rebuild, preserved MANUAL
-   dates, each day file's full preview, the index preview, the target directory
-   `.git-worklog/`, the `preview_id`, and the line
-   **"No files have been modified."**
-
-   If `not_written` is non-empty, say which dates and why (no changes that day).
-   A day the user expected and does not get is not something to discover after
-   the write.
+4. Show the dry-run summary (`references/interaction-flow.md` has the full
+   layout). The load-bearing parts: the resolved range and timezone; the output
+   **language** — and if it came from `fallback`, say so, because the user may
+   want to correct it before anything is written; the subagent provider/model;
+   each date's planned action (create / overwrite / no-change); the preserved
+   MANUAL dates; every day file's full preview and the index preview; the
+   `preview_id`; and the line **"No files have been modified."** If `not_written`
+   is non-empty, say which dates and why — a day the user expected and does not
+   get should not be discovered after the write.
 
 ---
 
@@ -523,6 +438,7 @@ Full rules: `references/interaction-flow.md`, `references/code-analysis-rules.md
 
 | Need | Read |
 |------|------|
+| `analyze prepare` / `collect` output fields, manifest contents, error codes, check mechanics | `references/analysis-pipeline.md` |
 | Report mode: scope (dates vs refs), coverage, gaps, scenarios | `references/report-mode.md` |
 | Menu, options, dry-run summary, confirmation, apply | `references/interaction-flow.md` |
 | Date modes, timezone, 30-day limit, NL normalisation | `references/date-parameter-contract.md` |
