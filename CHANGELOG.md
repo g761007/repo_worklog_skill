@@ -506,6 +506,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cannot be reused by a second front end. Each script converts it back to the
   exit code it always produced.
 
+- **One diff parser, shared** (#20). `analysis/worktree.py` and
+  `analysis/history.py` each carried their own `_git`, `_git_ok`, `_parse_raw`,
+  `_parse_numstat` and `GitError` — deliberate while they were standalone
+  scripts, pointless once both shipped in the package. worktree now imports them
+  from history (as `refs` and `reconcile` already did). Behaviour-preserving: no
+  test changed. It also collapses two incompatible `GitError` classes into one,
+  so a working-tree git failure now surfaces as `GIT_ERROR` rather than
+  `UNEXPECTED_ERROR`.
+
 ## [0.4.0] - 2026-07-16
 
 ### Added
